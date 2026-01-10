@@ -16,7 +16,7 @@ app.use(express.json({ limit: '1mb' }));
 const DATA_DIR = path.join(__dirname, 'data');
 const CLIENT_DIST = path.join(__dirname, '../client/dist');
 
-const SIMULATION_DELAY = 900;
+const SIMULATION_DELAY = 700;
 
 const MOCK_WORLD_CONTEXTS = [
   '在旧日的灰烬中，霓虹灯与古老的符文交织。巨型企业掌握着魔法源，而底层的黑客们试图解开神灵的防火墙。',
@@ -32,44 +32,254 @@ const MOCK_INTRO_QUESTS = [
 
 const rng = (min, max) => Math.floor(Math.random() * (max - min + 1)) + min;
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-
 const pick = (items) => items[rng(0, items.length - 1)];
 
-const buildCharacter = (settings) => ({
-  name: `流浪者 No.${rng(100, 999)}`,
-  title: '迷失的灵魂',
-  avatarSeed: rng(1, 9999),
-  stats: {
-    str: rng(5, 15) + (settings.physics === 'high' ? 5 : 0),
-    int: rng(5, 15) + (settings.magic === 'high' ? 5 : 0),
-    dex: rng(5, 15) + (settings.tech === 'high' ? 5 : 0),
-    cha: rng(5, 15),
-    money: rng(10, 100)
-  },
-  inventory: ['生锈的匕首', '半块压缩饼干', '神秘的芯片']
-});
-
-const buildWorld = (settings) => ({
-  name: '艾瑞斯 · 零号扇区',
-  description: settings.worldDesc || pick(MOCK_WORLD_CONTEXTS),
-  factions: ['赛博神教', '废土游骑兵', '奥术辛迪加'],
-  mapNodes: [
-    { id: 1, name: '起始点: 贫民窟', x: 18, y: 80, type: 'start' },
-    { id: 2, name: '中立区: 贸易站', x: 50, y: 50, type: 'neutral' },
-    { id: 3, name: '禁区: 核心塔', x: 82, y: 18, type: 'danger' }
-  ]
-});
-
-const buildFirstQuest = () => ({
-  text: pick(MOCK_INTRO_QUESTS),
-  options: ['低调行事，观察周围环境', '大声询问，试图寻找线索', '检查装备，准备战斗']
-});
-
-const baseTaskLine = (character, world) => [
-  `【起始线】你被指派成为“${world.factions[0]}”的临时联络人，需要在一周内获取情报。`,
-  `【身份】你伪装成${character.title}，携带一份未解密的数据卷轴。`,
-  '【目标】侦测“核心塔”的动向，为派系争取先机。'
+const HACK_PATTERNS = [/hack/i, /入侵/, /渗透/, /攻击/, /绕过/, /漏洞/, /病毒/, /木马/, /脚本注入/];
+const SENSITIVE_PATTERNS = [
+  /政治/,
+  /敏感/,
+  /色情/,
+  /赌博/,
+  /恐怖/,
+  /暴恐/,
+  /毒品/,
+  /枪支/,
+  /邪教/,
+  /极端/
 ];
+const TASK_DIRECTIVE_PATTERNS = [/任务/, /目标/, /最终目的/, /必须完成/, /强制/];
+const STAT_PATTERNS = [
+  /武力值/,
+  /力量/,
+  /敏捷/,
+  /智力/,
+  /魅力/,
+  /属性/,
+  /数值/,
+  /点数/,
+  /战力/
+];
+
+const sanitizePrompt = (text, options = {}) => {
+  if (!text) return '';
+  let cleaned = text;
+  if (options.removeTaskDirectives) {
+    cleaned = cleaned
+      .split(/(?<=[。！？.!?])/)
+      .filter((sentence) => !TASK_DIRECTIVE_PATTERNS.some((pattern) => pattern.test(sentence)))
+      .join('');
+  }
+
+  cleaned = cleaned.replace(/[0-9]+/g, '');
+  cleaned = cleaned.replace(/\s{2,}/g, ' ').trim();
+  return cleaned;
+};
+
+const detectSafetyIssues = (text) =>
+  HACK_PATTERNS.some((pattern) => pattern.test(text)) ||
+  SENSITIVE_PATTERNS.some((pattern) => pattern.test(text));
+
+const checkUtility = (worldDesc, charDesc) => {
+  const worldOk =
+    worldDesc.length >= 8 &&
+    /(世界|王国|城市|星球|大陆|时代|文明|社会|荒原|王朝|未来|历史)/.test(worldDesc);
+  const charOk =
+    charDesc.length >= 6 &&
+    /(角色|主角|身份|背景|出身|职业|旅人|调查员|佣兵|学者|刺客|猎人|工程师|船长)/.test(charDesc);
+  return { worldOk, charOk };
+};
+
+const checkExpansion = (text) => {
+  const hasNumbers = /\d/.test(text);
+  const hasStatWords = STAT_PATTERNS.some((pattern) => pattern.test(text));
+  const hasStrongDirective = TASK_DIRECTIVE_PATTERNS.some((pattern) => pattern.test(text));
+  return hasNumbers || hasStatWords || hasStrongDirective;
+};
+
+const allocateStats = (settings) => {
+  const base = { str: 3, dex: 3, int: 3, cha: 3 };
+  let remaining = 3;
+  if (settings.physics === 'high') {
+    base.str += 1;
+    remaining -= 1;
+  }
+  if (settings.magic === 'high') {
+    base.int += 1;
+    remaining -= 1;
+  }
+  if (settings.tech === 'high') {
+    base.dex += 1;
+    remaining -= 1;
+  }
+  const order = ['cha', 'str', 'dex', 'int'];
+  let idx = 0;
+  while (remaining > 0) {
+    base[order[idx % order.length]] += 1;
+    remaining -= 1;
+    idx += 1;
+  }
+  return base;
+};
+
+const buildMapNodes = (count) => {
+  const nodes = Array.from({ length: count }, (_, index) => ({
+    id: index + 1,
+    name: `区域 ${index + 1}`,
+    x: rng(10, 90),
+    y: rng(10, 90),
+    type: index === 0 ? 'start' : index % 4 === 0 ? 'danger' : 'neutral'
+  }));
+  nodes[0].name = '起始点: 旧港区';
+  nodes[1].name = '中立区: 交易拱廊';
+  nodes[2].name = '禁区: 破碎塔群';
+  return nodes;
+};
+
+const buildWorldBuilder = (settings, input) => {
+  const factionNames = ['星环议会', '赤曜军团', '雾海协会', '银钥秘盟'];
+  const mapNodes = buildMapNodes(rng(8, 12));
+  const stats = allocateStats(settings);
+
+  return {
+    world_setting: `${input.worldDesc || pick(MOCK_WORLD_CONTEXTS)} 世界的科技与魔法并行，势力之间处于微妙平衡。`,
+    factions: factionNames.map((name, index) => ({
+      name,
+      summary: `势力 ${index + 1} 掌控着不同的资源与情报网络，彼此保持着脆弱的同盟关系。`
+    })),
+    map: mapNodes,
+    faction_1: {
+      name: factionNames[0],
+      background: '由学者与议员组成的高层议会，掌控高阶魔法与政治秩序。',
+      territory: '主城天穹港及其周边浮空环。',
+      conflicts: '与赤曜军团在能源源泉上长期对峙。',
+      abilities: '擅长信息控制与法术封印。',
+      organization: '议会-内廷-执行官三级结构。'
+    },
+    faction_2: {
+      name: factionNames[1],
+      background: '由前线士兵与重装骑士组成的军事集团。',
+      territory: '边境钢城与战线前哨。',
+      conflicts: '与银钥秘盟争夺武器原型。',
+      abilities: '重装作战、武力压制。',
+      organization: '军团长-战团-战士三级结构。'
+    },
+    faction_3: {
+      name: factionNames[2],
+      background: '民间航运与情报商的联合体。',
+      territory: '雾海群岛与贸易航线。',
+      conflicts: '与星环议会在情报垄断上摩擦。',
+      abilities: '隐秘交易、情报渗透。',
+      organization: '船团-交易所-密探网络。'
+    },
+    faction_4: {
+      name: factionNames[3],
+      background: '神秘学派系，传承远古科技遗迹的钥匙。',
+      territory: '沉眠遗迹与地下迷城。',
+      conflicts: '与赤曜军团争夺遗迹控制权。',
+      abilities: '古代机关、秘仪研究。',
+      organization: '掌钥者-祭司-侦行者。'
+    },
+    stats_allocation: stats,
+    inventory: ['折叠光刃', '信标晶片', '旧式通讯终端'],
+    Power_level:
+      settings.magic === 'high'
+        ? '魔法与科技高度融合，常见的战斗手段包括符文装甲与能量护盾。'
+        : '科技与魔法仍在磨合阶段，民间更多依赖冷兵器与简易工具。',
+    pic_style: ['低饱和', '雾感', '赛博幻想', '柔和霓虹']
+  };
+};
+
+const buildNarrator = (input, worldBuilder) => ({
+  origin_story: `你出生在${worldBuilder.map[0].name}的边缘街区，曾在${worldBuilder.faction_3.name}的船团做过短暂学徒。${input.charDesc || '你始终记得那场改变命运的风暴。'}`
+});
+
+const buildQuestMaster = (input, worldBuilder) => {
+  const taskCount = rng(5, 8);
+  const tasks = Array.from({ length: taskCount }, (_, index) => ({
+    id: index + 1,
+    summary: `任务 ${index + 1}：前往${worldBuilder.map[index % worldBuilder.map.length].name}，调查与${worldBuilder.factions[index % 4].name}有关的异动。`
+  }));
+  return {
+    task_num: taskCount,
+    final_goal: `协助${worldBuilder.faction_1.name}赢得关键战役，获得影响世界格局的席位。`,
+    tasks
+  };
+};
+
+const buildSkillMaster = (worldBuilder) => ({
+  skill: ['雾影潜行', '短距跃迁', '星环解读'],
+  item: worldBuilder.inventory
+});
+
+const buildAssets = (worldBuilder) => {
+  const avatarSvg = `data:image/svg+xml;utf8,${encodeURIComponent(`
+    <svg xmlns="http://www.w3.org/2000/svg" width="256" height="256">
+      <defs>
+        <linearGradient id="g" x1="0" x2="1" y1="0" y2="1">
+          <stop offset="0%" stop-color="#22d3ee" />
+          <stop offset="100%" stop-color="#6366f1" />
+        </linearGradient>
+      </defs>
+      <rect width="256" height="256" fill="#0f172a" />
+      <circle cx="128" cy="128" r="100" fill="url(#g)" opacity="0.9" />
+      <text x="128" y="140" font-size="56" text-anchor="middle" fill="#0f172a" font-family="sans-serif">L</text>
+    </svg>
+  `)}`;
+
+  const mapSvg = `data:image/svg+xml;utf8,${encodeURIComponent(`
+    <svg xmlns="http://www.w3.org/2000/svg" width="512" height="320">
+      <rect width="512" height="320" fill="#0f172a" />
+      <rect x="24" y="24" width="464" height="272" fill="#111827" stroke="#22d3ee" stroke-width="2" />
+      <text x="256" y="60" font-size="18" text-anchor="middle" fill="#94a3b8" font-family="sans-serif">世界概要地图</text>
+      <text x="256" y="92" font-size="12" text-anchor="middle" fill="#64748b" font-family="sans-serif">${worldBuilder.pic_style.join(' · ')}</text>
+    </svg>
+  `)}`;
+
+  return {
+    avatar: {
+      prompt: `角色头像，风格：${worldBuilder.pic_style.join('，')}`,
+      image: avatarSvg
+    },
+    map: {
+      prompt: `地图概览，风格：${worldBuilder.pic_style.join('，')}`,
+      image: mapSvg
+    }
+  };
+};
+
+const buildCharacter = (input, worldBuilder, assets) => ({
+  name: `流浪者 ${rng(100, 999)}`,
+  title: '星港游民',
+  avatarSeed: rng(1, 9999),
+  portrait: assets.avatar.image,
+  stats: {
+    str: worldBuilder.stats_allocation.str,
+    dex: worldBuilder.stats_allocation.dex,
+    int: worldBuilder.stats_allocation.int,
+    cha: worldBuilder.stats_allocation.cha,
+    money: rng(10, 50)
+  },
+  inventory: worldBuilder.inventory,
+  originStory: input.charDesc
+});
+
+const buildWorld = (worldBuilder) => ({
+  name: '艾瑞斯 · 零号扇区',
+  description: worldBuilder.world_setting,
+  factions: worldBuilder.factions.map((faction) => faction.name),
+  mapNodes: worldBuilder.map
+});
+
+const buildFirstQuest = (questMaster) => {
+  if (!questMaster?.tasks?.length) return { text: pick(MOCK_INTRO_QUESTS), options: [] };
+  return {
+    text: `【起始任务】${questMaster.tasks[0].summary}`,
+    options: ['谨慎观察周围环境', '寻找可接触的势力线人', '检查装备并规划路线']
+  };
+};
+
+const baseTaskLine = (questMaster) =>
+  questMaster.tasks.map((task) => `【节点 ${task.id}】${task.summary}`);
 
 app.get('/api/health', (req, res) => {
   res.json({ ok: true });
@@ -77,16 +287,87 @@ app.get('/api/health', (req, res) => {
 
 app.post('/api/genesis', async (req, res) => {
   const settings = req.body || {};
+  const worldDescRaw = settings.worldDesc?.trim() || '';
+  const charDescRaw = settings.charDesc?.trim() || '';
+
   await wait(SIMULATION_DELAY);
 
-  const character = buildCharacter(settings);
-  const world = buildWorld(settings);
-  const firstQuest = buildFirstQuest();
+  const safetyFailed = detectSafetyIssues(`${worldDescRaw} ${charDescRaw}`);
+  const utilityCheck = checkUtility(worldDescRaw, charDescRaw);
+
+  const expansionFlag = checkExpansion(`${worldDescRaw} ${charDescRaw}`);
+  const sanitizedWorldDesc = sanitizePrompt(worldDescRaw, { removeTaskDirectives: true });
+  const sanitizedCharDesc = sanitizePrompt(charDescRaw, { removeTaskDirectives: false });
+
+  const checks = {
+    safety: {
+      status: safetyFailed ? 'fail' : 'pass',
+      message: safetyFailed
+        ? '检测到可能的攻击或敏感信息，请调整描述后再试。'
+        : '安全检查通过。'
+    },
+    utility: {
+      status: utilityCheck.worldOk && utilityCheck.charOk ? 'pass' : 'fail',
+      message:
+        utilityCheck.worldOk && utilityCheck.charOk
+          ? '效用检查通过。'
+          : '世界观或角色描述不足，请补充更清晰的设定。'
+    },
+    expansion: {
+      status: expansionFlag ? 'warn' : 'pass',
+      message: expansionFlag
+        ? '检测到强指向性或数值化描述，已自动弱化处理。'
+        : '扩展检查通过。'
+    }
+  };
+
+  if (safetyFailed || !utilityCheck.worldOk || !utilityCheck.charOk) {
+    return res.status(400).json({
+      ok: false,
+      checks,
+      sanitizedInput: {
+        worldDesc: sanitizedWorldDesc,
+        charDesc: sanitizedCharDesc
+      }
+    });
+  }
+
+  await wait(SIMULATION_DELAY);
+
+  const input = {
+    worldDesc: sanitizedWorldDesc || worldDescRaw,
+    charDesc: sanitizedCharDesc || charDescRaw,
+    settings: {
+      magic: settings.magic || 'mid',
+      physics: settings.physics || 'mid',
+      tech: settings.tech || 'mid'
+    }
+  };
+
+  const worldBuilder = buildWorldBuilder(input.settings, input);
+  const narrator = buildNarrator(input, worldBuilder);
+  const questMaster = buildQuestMaster(input, worldBuilder);
+  const skillMaster = buildSkillMaster(worldBuilder);
+  const assets = buildAssets(worldBuilder);
+
+  const character = buildCharacter(input, worldBuilder, assets);
+  const world = buildWorld(worldBuilder);
+  const firstQuest = buildFirstQuest(questMaster);
 
   res.json({
+    ok: true,
+    checks,
+    playerInput: input,
+    worldBuilder,
+    multiAgent: {
+      narrator,
+      questMaster,
+      skillMaster
+    },
+    assets,
     character,
     world,
-    taskLine: baseTaskLine(character, world),
+    taskLine: baseTaskLine(questMaster),
     firstQuest
   });
 });
