@@ -12,6 +12,14 @@
 
 > 需要 Node.js 18+。
 
+### Windows 一键启动
+
+```bat
+run_game.bat
+```
+
+脚本会提示输入 API Key，并自动安装依赖、同时启动前后端。
+
 ### 1) 启动后端
 
 ```bash
