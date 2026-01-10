@@ -88,7 +88,7 @@ const runPromptChecks = async (worldDescRaw, charDescRaw, apiKey) => {
         role: 'system',
         content: [
           {
-            type: 'text',
+            type: 'input_text',
             text: `你是内容审核与创世纪输入审查员。请仅输出 JSON 对象，不要输出任何多余文字。
 
 需要完成四项检查并给出简短中文说明：
@@ -116,7 +116,7 @@ const runPromptChecks = async (worldDescRaw, charDescRaw, apiKey) => {
         role: 'user',
         content: [
           {
-            type: 'text',
+            type: 'input_text',
             text: JSON.stringify({
               worldDesc: worldDescRaw,
               charDesc: charDescRaw
