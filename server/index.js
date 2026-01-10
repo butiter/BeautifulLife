@@ -34,31 +34,7 @@ const rng = (min, max) => Math.floor(Math.random() * (max - min + 1)) + min;
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const pick = (items) => items[rng(0, items.length - 1)];
 
-const HACK_PATTERNS = [/hack/i, /入侵/, /渗透/, /攻击/, /绕过/, /漏洞/, /病毒/, /木马/, /脚本注入/];
-const SENSITIVE_PATTERNS = [
-  /政治/,
-  /敏感/,
-  /色情/,
-  /赌博/,
-  /恐怖/,
-  /暴恐/,
-  /毒品/,
-  /枪支/,
-  /邪教/,
-  /极端/
-];
 const TASK_DIRECTIVE_PATTERNS = [/任务/, /目标/, /最终目的/, /必须完成/, /强制/];
-const STAT_PATTERNS = [
-  /武力值/,
-  /力量/,
-  /敏捷/,
-  /智力/,
-  /魅力/,
-  /属性/,
-  /数值/,
-  /点数/,
-  /战力/
-];
 
 const sanitizePrompt = (text, options = {}) => {
   if (!text) return '';
@@ -75,25 +51,119 @@ const sanitizePrompt = (text, options = {}) => {
   return cleaned;
 };
 
-const detectSafetyIssues = (text) =>
-  HACK_PATTERNS.some((pattern) => pattern.test(text)) ||
-  SENSITIVE_PATTERNS.some((pattern) => pattern.test(text));
+const OPENAI_API_URL = 'https://api.openai.com/v1/responses';
+const CHECK_MODEL = 'gpt-5-mini';
 
-const checkUtility = (worldDesc, charDesc) => {
-  const worldOk =
-    worldDesc.length >= 8 &&
-    /(世界|王国|城市|星球|大陆|时代|文明|社会|荒原|王朝|未来|历史)/.test(worldDesc);
-  const charOk =
-    charDesc.length >= 6 &&
-    /(角色|主角|身份|背景|出身|职业|旅人|调查员|佣兵|学者|刺客|猎人|工程师|船长)/.test(charDesc);
-  return { worldOk, charOk };
+const getApiKey = (req) => req.headers['x-api-key'] || process.env.OPENAI_API_KEY;
+
+const extractResponseText = (data) => {
+  if (typeof data?.output_text === 'string') return data.output_text;
+  const message = data?.output?.find((item) => item.type === 'message') || data?.output?.[0];
+  if (!message?.content) return '';
+  const textItem = message.content.find((item) => item.type === 'output_text');
+  return textItem?.text || '';
 };
 
-const checkExpansion = (text) => {
-  const hasNumbers = /\d/.test(text);
-  const hasStatWords = STAT_PATTERNS.some((pattern) => pattern.test(text));
-  const hasStrongDirective = TASK_DIRECTIVE_PATTERNS.some((pattern) => pattern.test(text));
-  return hasNumbers || hasStatWords || hasStrongDirective;
+const normalizeStatus = (value, allowed, fallback = 'fail') =>
+  allowed.includes(value) ? value : fallback;
+
+const runPromptChecks = async (worldDescRaw, charDescRaw, apiKey) => {
+  const payload = {
+    model: CHECK_MODEL,
+    temperature: 0.2,
+    response_format: { type: 'json_object' },
+    input: [
+      {
+        role: 'system',
+        content: [
+          {
+            type: 'text',
+            text: `你是内容审核与创世纪输入审查员。请仅输出 JSON 对象，不要输出任何多余文字。
+
+需要完成四项检查并给出简短中文说明：
+1) safety：若包含攻击/入侵/绕过/漏洞/脚本注入等黑客内容，或政治/色情/赌博/恐怖/毒品/枪支/邪教/极端等敏感主题，则 fail；否则 pass。
+2) utility：若世界观描述与角色描述足够明确、可用于生成故事，则 pass；否则 fail。
+3) expansion：若包含数值化属性、强指向性任务/目标/必须完成的指令等，应标记 warn；否则 pass。
+4) builder：若输入足以直接进入世界构建（无需继续追问），则 pass；否则 fail。
+
+同时返回 sanitizedInput：在保留用户意图的前提下，移除攻击/敏感内容与过强指令化表述，必要时简化数值化词汇。
+
+输出 JSON 结构：
+{
+  "checks": {
+    "safety": { "status": "pass|fail", "message": "..." },
+    "utility": { "status": "pass|fail", "message": "..." },
+    "expansion": { "status": "pass|warn", "message": "..." },
+    "builder": { "status": "pass|fail", "message": "..." }
+  },
+  "sanitizedInput": { "worldDesc": "...", "charDesc": "..." }
+}`
+          }
+        ]
+      },
+      {
+        role: 'user',
+        content: [
+          {
+            type: 'text',
+            text: JSON.stringify({
+              worldDesc: worldDescRaw,
+              charDesc: charDescRaw
+            })
+          }
+        ]
+      }
+    ]
+  };
+
+  const response = await fetch(OPENAI_API_URL, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${apiKey}`
+    },
+    body: JSON.stringify(payload)
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`OpenAI request failed: ${response.status} ${errorText}`);
+  }
+
+  const data = await response.json();
+  const outputText = extractResponseText(data);
+  if (!outputText) {
+    throw new Error('OpenAI response missing output text.');
+  }
+
+  const parsed = JSON.parse(outputText);
+  const rawChecks = parsed?.checks || {};
+  const checks = {
+    safety: {
+      status: normalizeStatus(rawChecks?.safety?.status, ['pass', 'fail']),
+      message: rawChecks?.safety?.message || '安全检查完成。'
+    },
+    utility: {
+      status: normalizeStatus(rawChecks?.utility?.status, ['pass', 'fail']),
+      message: rawChecks?.utility?.message || '效用检查完成。'
+    },
+    expansion: {
+      status: normalizeStatus(rawChecks?.expansion?.status, ['pass', 'warn']),
+      message: rawChecks?.expansion?.message || '扩展检查完成。'
+    },
+    builder: {
+      status: normalizeStatus(rawChecks?.builder?.status, ['pass', 'fail']),
+      message: rawChecks?.builder?.message || '构建检查完成。'
+    }
+  };
+
+  return {
+    checks,
+    sanitizedInput: {
+      worldDesc: parsed?.sanitizedInput?.worldDesc || sanitizePrompt(worldDescRaw, { removeTaskDirectives: true }),
+      charDesc: parsed?.sanitizedInput?.charDesc || sanitizePrompt(charDescRaw)
+    }
+  };
 };
 
 const allocateStats = (settings) => {
@@ -289,54 +359,65 @@ app.post('/api/genesis', async (req, res) => {
   const settings = req.body || {};
   const worldDescRaw = settings.worldDesc?.trim() || '';
   const charDescRaw = settings.charDesc?.trim() || '';
+  const apiKey = getApiKey(req);
 
   await wait(SIMULATION_DELAY);
 
-  const safetyFailed = detectSafetyIssues(`${worldDescRaw} ${charDescRaw}`);
-  const utilityCheck = checkUtility(worldDescRaw, charDescRaw);
+  if (!apiKey) {
+    return res.status(401).json({
+      ok: false,
+      checks: {
+        safety: { status: 'fail', message: '缺少 API Key，无法执行安全检查。' },
+        utility: { status: 'fail', message: '缺少 API Key，无法执行效用检查。' },
+        expansion: { status: 'fail', message: '缺少 API Key，无法执行扩展检查。' },
+        builder: { status: 'fail', message: '缺少 API Key，无法执行构建检查。' }
+      },
+      sanitizedInput: {
+        worldDesc: sanitizePrompt(worldDescRaw, { removeTaskDirectives: true }),
+        charDesc: sanitizePrompt(charDescRaw)
+      }
+    });
+  }
 
-  const expansionFlag = checkExpansion(`${worldDescRaw} ${charDescRaw}`);
-  const sanitizedWorldDesc = sanitizePrompt(worldDescRaw, { removeTaskDirectives: true });
-  const sanitizedCharDesc = sanitizePrompt(charDescRaw, { removeTaskDirectives: false });
+  let checkPayload;
+  try {
+    checkPayload = await runPromptChecks(worldDescRaw, charDescRaw, apiKey);
+  } catch (error) {
+    return res.status(502).json({
+      ok: false,
+      error: '安全检查服务不可用，请稍后重试。',
+      checks: {
+        safety: { status: 'fail', message: '安全检查失败。' },
+        utility: { status: 'fail', message: '效用检查失败。' },
+        expansion: { status: 'fail', message: '扩展检查失败。' },
+        builder: { status: 'fail', message: '构建检查失败。' }
+      },
+      sanitizedInput: {
+        worldDesc: sanitizePrompt(worldDescRaw, { removeTaskDirectives: true }),
+        charDesc: sanitizePrompt(charDescRaw)
+      }
+    });
+  }
 
-  const checks = {
-    safety: {
-      status: safetyFailed ? 'fail' : 'pass',
-      message: safetyFailed
-        ? '检测到可能的攻击或敏感信息，请调整描述后再试。'
-        : '安全检查通过。'
-    },
-    utility: {
-      status: utilityCheck.worldOk && utilityCheck.charOk ? 'pass' : 'fail',
-      message:
-        utilityCheck.worldOk && utilityCheck.charOk
-          ? '效用检查通过。'
-          : '世界观或角色描述不足，请补充更清晰的设定。'
-    },
-    expansion: {
-      status: expansionFlag ? 'warn' : 'pass',
-      message: expansionFlag
-        ? '检测到强指向性或数值化描述，已自动弱化处理。'
-        : '扩展检查通过。'
-    }
-  };
+  const { checks, sanitizedInput } = checkPayload;
+  const shouldBlock =
+    checks.safety.status !== 'pass' ||
+    checks.utility.status !== 'pass' ||
+    checks.builder.status !== 'pass';
 
-  if (safetyFailed || !utilityCheck.worldOk || !utilityCheck.charOk) {
+  if (shouldBlock) {
     return res.status(400).json({
       ok: false,
       checks,
-      sanitizedInput: {
-        worldDesc: sanitizedWorldDesc,
-        charDesc: sanitizedCharDesc
-      }
+      sanitizedInput
     });
   }
 
   await wait(SIMULATION_DELAY);
 
   const input = {
-    worldDesc: sanitizedWorldDesc || worldDescRaw,
-    charDesc: sanitizedCharDesc || charDescRaw,
+    worldDesc: sanitizedInput.worldDesc || worldDescRaw,
+    charDesc: sanitizedInput.charDesc || charDescRaw,
     settings: {
       magic: settings.magic || 'mid',
       physics: settings.physics || 'mid',
