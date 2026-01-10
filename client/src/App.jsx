@@ -10,13 +10,14 @@ import {
   Send,
   Shield,
   Sword,
+  Terminal,
   User,
   Zap
 } from 'lucide-react';
 
 const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:3001';
 
-const rng = (min, max) => Math.floor(Math.random() * (max - min + 1)) + min;
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 const StatBar = ({ icon: Icon, label, value, color }) => (
   <div className="mb-4">
@@ -30,13 +31,60 @@ const StatBar = ({ icon: Icon, label, value, color }) => (
     <div className="h-1.5 w-full bg-slate-800 rounded-full overflow-hidden">
       <div
         className={`h-full ${color} transition-all duration-500`}
-        style={{ width: `${Math.min(value * 4, 100)}%` }}
+        style={{ width: `${Math.min(value * 6, 100)}%` }}
       />
     </div>
   </div>
 );
 
-const GameMap = ({ nodes, isOpen, toggle }) => (
+const Spinner = () => (
+  <div className="flex items-center justify-center">
+    <span className="loader" />
+  </div>
+);
+
+const GenesisCheckItem = ({ title, status, detail }) => {
+  const statusStyles = {
+    pending: 'text-slate-500',
+    running: 'text-cyan-400',
+    pass: 'text-emerald-400',
+    fail: 'text-rose-400',
+    warn: 'text-amber-400'
+  };
+
+  return (
+    <div className="flex items-start gap-4 bg-slate-900/70 border border-slate-800 rounded-xl p-4">
+      <div className="w-10 h-10 rounded-full bg-slate-800 flex items-center justify-center">
+        {status === 'running' ? (
+          <Spinner />
+        ) : (
+          <div
+            className={`w-3 h-3 rounded-full ${
+              status === 'pass'
+                ? 'bg-emerald-400'
+                : status === 'fail'
+                ? 'bg-rose-400'
+                : status === 'warn'
+                ? 'bg-amber-400'
+                : 'bg-slate-600'
+            }`}
+          />
+        )}
+      </div>
+      <div className="flex-1">
+        <h3 className={`text-sm font-semibold ${statusStyles[status] || 'text-slate-200'}`}>
+          {title}
+        </h3>
+        <p className="text-xs text-slate-400 mt-1">{detail}</p>
+      </div>
+      <span className={`text-xs uppercase tracking-widest ${statusStyles[status] || 'text-slate-400'}`}>
+        {status}
+      </span>
+    </div>
+  );
+};
+
+const GameMap = ({ nodes, isOpen, toggle, mapImage }) => (
   <div
     className={`fixed top-0 right-0 h-full bg-slate-950 border-l border-slate-800 shadow-2xl transform transition-transform duration-500 ease-in-out z-50 ${
       isOpen ? 'translate-x-0' : 'translate-x-full'
@@ -51,6 +99,15 @@ const GameMap = ({ nodes, isOpen, toggle }) => (
       <button onClick={toggle} className="p-2 hover:bg-slate-800 rounded text-slate-400">
         ✕
       </button>
+    </div>
+
+    <div className="p-4 border-b border-slate-800">
+      <img
+        src={mapImage}
+        alt="地图预览"
+        className="w-full rounded-lg border border-slate-700"
+      />
+      <p className="text-xs text-slate-500 mt-2">地图由资产生成器提供，仅用于世界概览。</p>
     </div>
 
     <div className="relative w-full h-full bg-[radial-gradient(ellipse_at_center,_var(--tw-gradient-stops))] from-slate-800 to-slate-950 p-6">
@@ -115,9 +172,74 @@ const avatarGradients = [
   'from-amber-400 via-orange-500 to-rose-600'
 ];
 
+const buildGenesisChecks = () => [
+  { key: 'safety', title: '安全检查', status: 'pending', detail: '扫描潜在攻击与敏感内容...' },
+  { key: 'utility', title: '效用检查', status: 'pending', detail: '验证世界观与角色描述的完整性...' },
+  { key: 'expansion', title: '扩展检查', status: 'pending', detail: '检测强指向性与数值化描述...' },
+  { key: 'builder', title: '世界构建器', status: 'pending', detail: '组织世界/角色/任务线结构化输出...' }
+];
+
+const DebugView = () => {
+  const [debugData, setDebugData] = useState(null);
+
+  useEffect(() => {
+    const stored = localStorage.getItem('genesisDebug');
+    if (stored) {
+      setDebugData(JSON.parse(stored));
+    }
+  }, []);
+
+  if (!debugData) {
+    return (
+      <div className="min-h-screen bg-slate-950 text-slate-200 flex flex-col items-center justify-center p-8">
+        <Terminal size={48} className="text-cyan-400 mb-4" />
+        <p className="text-slate-400">暂无 Debug 数据，请先完成创世纪流程。</p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="min-h-screen bg-slate-950 text-slate-200 p-8 space-y-10">
+      <div className="flex items-center justify-between">
+        <h1 className="text-3xl font-semibold text-white">Genesis Debug Console</h1>
+        <a href="/" className="text-cyan-400 text-sm">
+          返回游戏
+        </a>
+      </div>
+
+      <section className="space-y-4">
+        <h2 className="text-lg text-cyan-300">世界构建器 (World Builder)</h2>
+        <pre className="bg-slate-900/70 border border-slate-800 rounded-xl p-4 text-xs overflow-auto">
+          {JSON.stringify(debugData.worldBuilder, null, 2)}
+        </pre>
+      </section>
+
+      <section className="space-y-4">
+        <h2 className="text-lg text-cyan-300">身份与剧情编排器 (Multi-Agent)</h2>
+        <pre className="bg-slate-900/70 border border-slate-800 rounded-xl p-4 text-xs overflow-auto">
+          {JSON.stringify(debugData.multiAgent, null, 2)}
+        </pre>
+      </section>
+
+      <section className="space-y-4">
+        <h2 className="text-lg text-cyan-300">资产生成器</h2>
+        <div className="grid gap-4 md:grid-cols-2">
+          <div className="bg-slate-900/70 border border-slate-800 rounded-xl p-4">
+            <h3 className="text-sm text-slate-300 mb-2">头像</h3>
+            <img src={debugData.assets.avatar.image} alt="avatar" className="rounded-lg border border-slate-700" />
+          </div>
+          <div className="bg-slate-900/70 border border-slate-800 rounded-xl p-4">
+            <h3 className="text-sm text-slate-300 mb-2">地图</h3>
+            <img src={debugData.assets.map.image} alt="map" className="rounded-lg border border-slate-700" />
+          </div>
+        </div>
+      </section>
+    </div>
+  );
+};
+
 export default function App() {
   const [phase, setPhase] = useState('SETUP');
-  const [genesisStep, setGenesisStep] = useState(0);
   const [worldSettings, setWorldSettings] = useState(defaultSettings);
   const [character, setCharacter] = useState(null);
   const [world, setWorld] = useState(null);
@@ -129,6 +251,12 @@ export default function App() {
   const [customInput, setCustomInput] = useState('');
   const [saveId, setSaveId] = useState('');
   const [saveStatus, setSaveStatus] = useState('idle');
+  const [genesisChecks, setGenesisChecks] = useState(buildGenesisChecks());
+  const [genesisError, setGenesisError] = useState('');
+  const [playerInput, setPlayerInput] = useState(null);
+  const [worldBuilder, setWorldBuilder] = useState(null);
+  const [multiAgent, setMultiAgent] = useState(null);
+  const [assets, setAssets] = useState(null);
 
   const scrollRef = useRef(null);
 
@@ -145,13 +273,8 @@ export default function App() {
 
   const handleStartGenesis = async () => {
     setPhase('GENESIS');
-
-    let step = 0;
-    const interval = setInterval(() => {
-      step += 1;
-      setGenesisStep(step);
-      if (step > 3) clearInterval(interval);
-    }, 800);
+    setGenesisChecks(buildGenesisChecks());
+    setGenesisError('');
 
     const response = await fetch(`${API_BASE}/api/genesis`, {
       method: 'POST',
@@ -160,13 +283,66 @@ export default function App() {
     });
     const data = await response.json();
 
+    const order = ['safety', 'utility', 'expansion', 'builder'];
+    for (let i = 0; i < order.length; i += 1) {
+      setGenesisChecks((prev) =>
+        prev.map((item, index) =>
+          index === i ? { ...item, status: 'running', detail: item.detail } : item
+        )
+      );
+      await sleep(650);
+
+      if (order[i] === 'builder') {
+        setGenesisChecks((prev) =>
+          prev.map((item, index) =>
+            index === i
+              ? { ...item, status: data.ok ? 'pass' : 'fail', detail: '结构化输出完成。' }
+              : item
+          )
+        );
+      } else {
+        const checkResult = data.checks?.[order[i]];
+        const status = checkResult?.status === 'warn' ? 'warn' : checkResult?.status || 'fail';
+        setGenesisChecks((prev) =>
+          prev.map((item, index) =>
+            index === i
+              ? { ...item, status, detail: checkResult?.message || '检测失败。' }
+              : item
+          )
+        );
+      }
+      await sleep(400);
+    }
+
+    if (!data.ok) {
+      setGenesisError('创世纪校验未通过，请重新调整输入后再试。');
+      return;
+    }
+
+    setPlayerInput(data.playerInput);
+    setWorldBuilder(data.worldBuilder);
+    setMultiAgent(data.multiAgent);
+    setAssets(data.assets);
     setCharacter(data.character);
     setWorld(data.world);
     setTaskLine(data.taskLine || []);
-    setQuestLog([{ type: 'narrator', text: data.firstQuest.text }]);
-    setCurrentOptions(data.firstQuest.options);
+    setQuestLog([
+      { type: 'narrator', text: data.multiAgent?.narrator?.origin_story },
+      { type: 'system', text: data.firstQuest?.text }
+    ]);
+    setCurrentOptions(data.firstQuest?.options || []);
 
-    setTimeout(() => setPhase('GAME'), 3200);
+    localStorage.setItem(
+      'genesisDebug',
+      JSON.stringify({
+        worldBuilder: data.worldBuilder,
+        multiAgent: data.multiAgent,
+        assets: data.assets
+      })
+    );
+
+    await sleep(800);
+    setPhase('GAME');
   };
 
   const handleAction = async (actionText) => {
@@ -209,7 +385,11 @@ export default function App() {
         character,
         world,
         questLog,
-        taskLine
+        taskLine,
+        playerInput,
+        worldBuilder,
+        multiAgent,
+        assets
       })
     });
 
@@ -282,31 +462,37 @@ export default function App() {
   );
 
   const renderGenesis = () => (
-    <div className="min-h-screen bg-slate-950 flex flex-col items-center justify-center relative overflow-hidden">
-      <div
-        className={`text-6xl md:text-8xl font-black tracking-widest text-white transition-opacity duration-1000 ${
-          genesisStep >= 1 ? 'opacity-100' : 'opacity-0'
-        }`}
-      >
-        创
-      </div>
-      <div
-        className={`text-6xl md:text-8xl font-black tracking-widest text-white transition-opacity duration-1000 delay-300 mt-4 ${
-          genesisStep >= 2 ? 'opacity-100' : 'opacity-0'
-        }`}
-      >
-        世
-      </div>
-      <div
-        className={`text-6xl md:text-8xl font-black tracking-widest text-white transition-opacity duration-1000 delay-600 mt-4 ${
-          genesisStep >= 3 ? 'opacity-100' : 'opacity-0'
-        }`}
-      >
-        纪
-      </div>
+    <div className="min-h-screen bg-slate-950 flex flex-col items-center justify-center p-8">
+      <div className="max-w-2xl w-full space-y-6">
+        <div className="text-center">
+          <h2 className="text-3xl font-semibold text-white">创世纪 · Genesis</h2>
+          <p className="text-sm text-slate-500 mt-2">正在进行多层检查与结构化构建，请稍候...</p>
+        </div>
 
-      <div className="absolute bottom-10 text-cyan-400 font-mono text-sm animate-pulse">
-        Generating World Parameters... 构建神经网络...
+        <div className="space-y-3">
+          {genesisChecks.map((check) => (
+            <GenesisCheckItem
+              key={check.key}
+              title={check.title}
+              status={check.status}
+              detail={check.detail}
+            />
+          ))}
+        </div>
+
+        {genesisError && (
+          <div className="bg-rose-500/10 border border-rose-500/40 text-rose-200 rounded-xl p-4 text-sm">
+            {genesisError}
+            <div className="mt-4 flex justify-end">
+              <button
+                onClick={() => setPhase('SETUP')}
+                className="px-4 py-2 text-xs uppercase tracking-widest bg-slate-800 border border-slate-700 rounded-lg text-slate-200 hover:text-white hover:border-cyan-400 transition"
+              >
+                返回调整
+              </button>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );
@@ -316,9 +502,13 @@ export default function App() {
       <div className="w-72 bg-slate-900/80 border-r border-slate-800 flex flex-col hidden lg:flex">
         <div className="p-6 flex flex-col items-center border-b border-slate-800 bg-slate-900/80">
           <div
-            className={`w-24 h-24 rounded-full bg-gradient-to-br ${avatarGradient} mb-4 shadow-lg ring-4 ring-slate-800 flex items-center justify-center text-4xl text-white/70`}
+            className={`w-24 h-24 rounded-full bg-gradient-to-br ${avatarGradient} mb-4 shadow-lg ring-4 ring-slate-800 flex items-center justify-center text-4xl text-white/70 overflow-hidden`}
           >
-            <User size={40} />
+            {assets?.avatar?.image ? (
+              <img src={assets.avatar.image} alt="头像" className="w-full h-full object-cover" />
+            ) : (
+              <User size={40} />
+            )}
           </div>
           <h2 className="text-xl font-semibold text-white">{character.name}</h2>
           <p className="text-xs text-slate-500 uppercase tracking-widest mt-1">{character.title}</p>
@@ -380,6 +570,12 @@ export default function App() {
             <h2 className="text-lg font-semibold text-white">{world.name}</h2>
           </div>
           <div className="flex items-center gap-3">
+            <a
+              href="/debug"
+              className="px-3 py-2 text-xs uppercase tracking-widest bg-slate-800 border border-slate-700 rounded-lg text-slate-200 hover:text-white hover:border-cyan-400 transition"
+            >
+              Debug
+            </a>
             <button
               onClick={handleSave}
               className="px-3 py-2 text-xs uppercase tracking-widest bg-slate-800 border border-slate-700 rounded-lg text-slate-200 hover:text-white hover:border-cyan-400 transition"
@@ -397,6 +593,19 @@ export default function App() {
         </div>
 
         <div className="flex-1 overflow-y-auto p-6 md:p-10 space-y-6 scroll-smooth" ref={scrollRef}>
+          <section className="grid gap-4 md:grid-cols-2">
+            <div className="bg-slate-900/60 border border-slate-800 rounded-2xl p-5 shadow-lg">
+              <h3 className="text-xs uppercase tracking-widest text-cyan-400 mb-3">玩家身份</h3>
+              <p className="text-sm text-slate-300 leading-relaxed">{playerInput?.charDesc}</p>
+              <p className="text-xs text-slate-500 mt-2">{multiAgent?.narrator?.origin_story}</p>
+            </div>
+            <div className="bg-slate-900/60 border border-slate-800 rounded-2xl p-5 shadow-lg">
+              <h3 className="text-xs uppercase tracking-widest text-cyan-400 mb-3">世界观概览</h3>
+              <p className="text-sm text-slate-300 leading-relaxed">{worldBuilder?.world_setting}</p>
+              <p className="text-xs text-slate-500 mt-2">{worldBuilder?.Power_level}</p>
+            </div>
+          </section>
+
           <section className="bg-slate-900/60 border border-slate-800 rounded-2xl p-5 shadow-lg">
             <h3 className="text-xs uppercase tracking-widest text-cyan-400 mb-3">系统任务线</h3>
             <div className="space-y-2 text-sm text-slate-300">
@@ -406,9 +615,7 @@ export default function App() {
                 </p>
               ))}
             </div>
-            {saveId && (
-              <p className="mt-3 text-xs text-emerald-400">存档编号：{saveId}</p>
-            )}
+            {saveId && <p className="mt-3 text-xs text-emerald-400">存档编号：{saveId}</p>}
           </section>
 
           <section className="space-y-6">
@@ -421,6 +628,8 @@ export default function App() {
                   className={`max-w-[85%] md:max-w-[70%] p-4 rounded-2xl shadow-sm text-base leading-relaxed ${
                     log.type === 'player'
                       ? 'bg-slate-800 text-slate-100 rounded-tr-none border border-slate-700'
+                      : log.type === 'system'
+                      ? 'bg-slate-900/80 text-slate-200 border border-cyan-700/60'
                       : 'bg-transparent text-slate-300 border-l-2 border-cyan-500 pl-6 rounded-none'
                   }`}
                 >
@@ -480,9 +689,20 @@ export default function App() {
         地图
       </button>
 
-      {world && <GameMap nodes={world.mapNodes} isOpen={isMapOpen} toggle={() => setIsMapOpen(false)} />}
+      {world && (
+        <GameMap
+          nodes={world.mapNodes}
+          isOpen={isMapOpen}
+          toggle={() => setIsMapOpen(false)}
+          mapImage={assets?.map?.image}
+        />
+      )}
     </div>
   );
+
+  if (window.location.pathname === '/debug') {
+    return <DebugView />;
+  }
 
   return (
     <>
@@ -492,4 +712,3 @@ export default function App() {
     </>
   );
 }
-
