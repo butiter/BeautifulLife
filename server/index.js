@@ -82,7 +82,7 @@ const runPromptChecks = async (worldDescRaw, charDescRaw, apiKey) => {
   const payload = {
     model: CHECK_MODEL,
     temperature: 0.2,
-    response_format: { type: 'json_object' },
+    text: { format: { type: 'json_object' } },
     input: [
       {
         role: 'system',
