@@ -181,6 +181,8 @@ const buildGenesisChecks = () => [
 
 const DebugView = () => {
   const [debugData, setDebugData] = useState(null);
+  const [apiKey, setApiKey] = useState(() => localStorage.getItem('openaiApiKey') || '');
+  const [keyStatus, setKeyStatus] = useState('idle');
 
   useEffect(() => {
     const stored = localStorage.getItem('genesisDebug');
@@ -189,14 +191,17 @@ const DebugView = () => {
     }
   }, []);
 
-  if (!debugData) {
-    return (
-      <div className="min-h-screen bg-slate-950 text-slate-200 flex flex-col items-center justify-center p-8">
-        <Terminal size={48} className="text-cyan-400 mb-4" />
-        <p className="text-slate-400">暂无 Debug 数据，请先完成创世纪流程。</p>
-      </div>
-    );
-  }
+  const handleSaveKey = () => {
+    const trimmed = apiKey.trim();
+    if (trimmed) {
+      localStorage.setItem('openaiApiKey', trimmed);
+      setKeyStatus('saved');
+    } else {
+      localStorage.removeItem('openaiApiKey');
+      setKeyStatus('cleared');
+    }
+    setTimeout(() => setKeyStatus('idle'), 2000);
+  };
 
   return (
     <div className="min-h-screen bg-slate-950 text-slate-200 p-8 space-y-10">
@@ -207,33 +212,77 @@ const DebugView = () => {
         </a>
       </div>
 
-      <section className="space-y-4">
-        <h2 className="text-lg text-cyan-300">世界构建器 (World Builder)</h2>
-        <pre className="bg-slate-900/70 border border-slate-800 rounded-xl p-4 text-xs overflow-auto">
-          {JSON.stringify(debugData.worldBuilder, null, 2)}
-        </pre>
-      </section>
-
-      <section className="space-y-4">
-        <h2 className="text-lg text-cyan-300">身份与剧情编排器 (Multi-Agent)</h2>
-        <pre className="bg-slate-900/70 border border-slate-800 rounded-xl p-4 text-xs overflow-auto">
-          {JSON.stringify(debugData.multiAgent, null, 2)}
-        </pre>
-      </section>
-
-      <section className="space-y-4">
-        <h2 className="text-lg text-cyan-300">资产生成器</h2>
-        <div className="grid gap-4 md:grid-cols-2">
-          <div className="bg-slate-900/70 border border-slate-800 rounded-xl p-4">
-            <h3 className="text-sm text-slate-300 mb-2">头像</h3>
-            <img src={debugData.assets.avatar.image} alt="avatar" className="rounded-lg border border-slate-700" />
-          </div>
-          <div className="bg-slate-900/70 border border-slate-800 rounded-xl p-4">
-            <h3 className="text-sm text-slate-300 mb-2">地图</h3>
-            <img src={debugData.assets.map.image} alt="map" className="rounded-lg border border-slate-700" />
-          </div>
+      <section className="space-y-3 bg-slate-900/70 border border-slate-800 rounded-xl p-4">
+        <h2 className="text-lg text-cyan-300">调试 Key</h2>
+        <p className="text-xs text-slate-400">
+          Debug 模式下可写入 API Key，仅保存在浏览器本地存储中。
+        </p>
+        <div className="flex flex-col md:flex-row gap-3">
+          <input
+            type="password"
+            className="flex-1 bg-slate-800 border border-slate-700 rounded p-2 text-sm focus:border-cyan-500 focus:outline-none"
+            placeholder="输入 API Key"
+            value={apiKey}
+            onChange={(e) => setApiKey(e.target.value)}
+          />
+          <button
+            onClick={handleSaveKey}
+            className="px-4 py-2 bg-cyan-900 hover:bg-cyan-800 text-cyan-100 text-sm font-semibold rounded-lg border border-cyan-700"
+          >
+            保存 Key
+          </button>
         </div>
+        {keyStatus !== 'idle' && (
+          <p className="text-xs text-emerald-400">
+            {keyStatus === 'saved' ? 'Key 已保存。' : 'Key 已清除。'}
+          </p>
+        )}
       </section>
+
+      {!debugData ? (
+        <div className="flex flex-col items-center justify-center p-8 border border-slate-800 rounded-xl bg-slate-900/40">
+          <Terminal size={48} className="text-cyan-400 mb-4" />
+          <p className="text-slate-400">暂无 Debug 数据，请先完成创世纪流程。</p>
+        </div>
+      ) : (
+        <>
+          <section className="space-y-4">
+            <h2 className="text-lg text-cyan-300">世界构建器 (World Builder)</h2>
+            <pre className="bg-slate-900/70 border border-slate-800 rounded-xl p-4 text-xs overflow-auto">
+              {JSON.stringify(debugData.worldBuilder, null, 2)}
+            </pre>
+          </section>
+
+          <section className="space-y-4">
+            <h2 className="text-lg text-cyan-300">身份与剧情编排器 (Multi-Agent)</h2>
+            <pre className="bg-slate-900/70 border border-slate-800 rounded-xl p-4 text-xs overflow-auto">
+              {JSON.stringify(debugData.multiAgent, null, 2)}
+            </pre>
+          </section>
+
+          <section className="space-y-4">
+            <h2 className="text-lg text-cyan-300">资产生成器</h2>
+            <div className="grid gap-4 md:grid-cols-2">
+              <div className="bg-slate-900/70 border border-slate-800 rounded-xl p-4">
+                <h3 className="text-sm text-slate-300 mb-2">头像</h3>
+                <img
+                  src={debugData.assets.avatar.image}
+                  alt="avatar"
+                  className="rounded-lg border border-slate-700"
+                />
+              </div>
+              <div className="bg-slate-900/70 border border-slate-800 rounded-xl p-4">
+                <h3 className="text-sm text-slate-300 mb-2">地图</h3>
+                <img
+                  src={debugData.assets.map.image}
+                  alt="map"
+                  className="rounded-lg border border-slate-700"
+                />
+              </div>
+            </div>
+          </section>
+        </>
+      )}
     </div>
   );
 };
@@ -260,6 +309,15 @@ export default function App() {
 
   const scrollRef = useRef(null);
 
+  const buildHeaders = () => {
+    const headers = { 'Content-Type': 'application/json' };
+    const storedKey = localStorage.getItem('openaiApiKey');
+    if (storedKey) {
+      headers['X-API-Key'] = storedKey;
+    }
+    return headers;
+  };
+
   useEffect(() => {
     if (scrollRef.current) {
       scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
@@ -278,7 +336,7 @@ export default function App() {
 
     const response = await fetch(`${API_BASE}/api/genesis`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: buildHeaders(),
       body: JSON.stringify(worldSettings)
     });
     const data = await response.json();
@@ -352,7 +410,7 @@ export default function App() {
 
     const response = await fetch(`${API_BASE}/api/turn`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: buildHeaders(),
       body: JSON.stringify({ action: actionText, stats: character.stats })
     });
     const result = await response.json();
@@ -380,7 +438,7 @@ export default function App() {
 
     const response = await fetch(`${API_BASE}/api/save`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: buildHeaders(),
       body: JSON.stringify({
         character,
         world,
