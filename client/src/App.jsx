@@ -287,6 +287,99 @@ const DebugView = () => {
   );
 };
 
+const LogView = () => {
+  const [logs, setLogs] = useState([]);
+  const [status, setStatus] = useState('idle');
+  const [error, setError] = useState('');
+
+  const fetchLogs = async () => {
+    setStatus('loading');
+    setError('');
+    try {
+      const response = await fetch(`${API_BASE}/api/logs`);
+      const data = await response.json();
+      setLogs(Array.isArray(data.logs) ? data.logs : []);
+      setStatus('ready');
+    } catch (err) {
+      const message = err instanceof Error ? err.message : '日志加载失败';
+      setError(message);
+      setStatus('error');
+    }
+  };
+
+  useEffect(() => {
+    fetchLogs();
+  }, []);
+
+  return (
+    <div className="min-h-screen bg-slate-950 text-slate-200 p-8 space-y-6">
+      <div className="flex items-center justify-between">
+        <div>
+          <h1 className="text-3xl font-semibold text-white">LLM 调用日志</h1>
+          <p className="text-xs text-slate-400 mt-1">记录每次 LLM 输入与返回文本。</p>
+        </div>
+        <div className="flex items-center gap-3">
+          <button
+            onClick={fetchLogs}
+            className="px-4 py-2 text-xs uppercase tracking-widest bg-slate-800 border border-slate-700 rounded-lg text-slate-200 hover:text-white hover:border-cyan-400 transition"
+          >
+            刷新
+          </button>
+          <a href="/" className="text-cyan-400 text-sm">
+            返回游戏
+          </a>
+        </div>
+      </div>
+
+      {status === 'loading' && (
+        <div className="flex items-center gap-2 text-sm text-cyan-300">
+          <Spinner />
+          日志加载中...
+        </div>
+      )}
+
+      {error && (
+        <div className="bg-rose-500/10 border border-rose-500/40 text-rose-200 rounded-xl p-4 text-sm">
+          {error}
+        </div>
+      )}
+
+      {!logs.length && status === 'ready' && !error && (
+        <div className="flex flex-col items-center justify-center p-8 border border-slate-800 rounded-xl bg-slate-900/40">
+          <Terminal size={48} className="text-cyan-400 mb-4" />
+          <p className="text-slate-400">暂无日志，请先完成一次 LLM 调用。</p>
+        </div>
+      )}
+
+      <div className="space-y-4">
+        {logs.map((log) => (
+          <div
+            key={log.id}
+            className="bg-slate-900/70 border border-slate-800 rounded-xl p-4 space-y-3"
+          >
+            <div className="flex flex-wrap items-center justify-between gap-3 text-xs text-slate-400">
+              <span>时间：{log.createdAt}</span>
+              <span>模型：{log.model}</span>
+            </div>
+            <div className="grid gap-3 md:grid-cols-2 text-xs">
+              <div className="bg-slate-950/60 border border-slate-800 rounded-lg p-3">
+                <p className="text-slate-400 mb-2">输入</p>
+                <pre className="whitespace-pre-wrap text-slate-200">
+                  {JSON.stringify(log.input, null, 2)}
+                </pre>
+              </div>
+              <div className="bg-slate-950/60 border border-slate-800 rounded-lg p-3">
+                <p className="text-slate-400 mb-2">输出</p>
+                <pre className="whitespace-pre-wrap text-slate-200">{log.output}</pre>
+              </div>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+};
+
 export default function App() {
   const [phase, setPhase] = useState('SETUP');
   const [worldSettings, setWorldSettings] = useState(defaultSettings);
@@ -634,6 +727,12 @@ export default function App() {
             >
               Debug
             </a>
+            <a
+              href="/log"
+              className="px-3 py-2 text-xs uppercase tracking-widest bg-slate-800 border border-slate-700 rounded-lg text-slate-200 hover:text-white hover:border-cyan-400 transition"
+            >
+              Log
+            </a>
             <button
               onClick={handleSave}
               className="px-3 py-2 text-xs uppercase tracking-widest bg-slate-800 border border-slate-700 rounded-lg text-slate-200 hover:text-white hover:border-cyan-400 transition"
@@ -760,6 +859,9 @@ export default function App() {
 
   if (window.location.pathname === '/debug') {
     return <DebugView />;
+  }
+  if (window.location.pathname === '/log') {
+    return <LogView />;
   }
 
   return (

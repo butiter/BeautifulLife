@@ -17,6 +17,8 @@ const DATA_DIR = path.join(__dirname, 'data');
 const CLIENT_DIST = path.join(__dirname, '../client/dist');
 
 const SIMULATION_DELAY = 700;
+const MAX_LLM_LOGS = 50;
+const llmLogs = [];
 
 const MOCK_WORLD_CONTEXTS = [
   '在旧日的灰烬中，霓虹灯与古老的符文交织。巨型企业掌握着魔法源，而底层的黑客们试图解开神灵的防火墙。',
@@ -64,10 +66,19 @@ const extractResponseText = (data) => {
   return textItem?.text || '';
 };
 
+const addLlmLog = (entry) => {
+  llmLogs.push(entry);
+  if (llmLogs.length > MAX_LLM_LOGS) {
+    llmLogs.shift();
+  }
+};
+
 const normalizeStatus = (value, allowed, fallback = 'fail') =>
   allowed.includes(value) ? value : fallback;
 
 const runPromptChecks = async (worldDescRaw, charDescRaw, apiKey) => {
+  const startedAt = new Date().toISOString();
+  const inputPayload = { worldDesc: worldDescRaw, charDesc: charDescRaw };
   const payload = {
     model: CHECK_MODEL,
     temperature: 0.2,
@@ -125,45 +136,68 @@ const runPromptChecks = async (worldDescRaw, charDescRaw, apiKey) => {
     body: JSON.stringify(payload)
   });
 
-  if (!response.ok) {
-    const errorText = await response.text();
-    throw new Error(`OpenAI request failed: ${response.status} ${errorText}`);
-  }
-
-  const data = await response.json();
-  const outputText = extractResponseText(data);
-  if (!outputText) {
-    throw new Error('OpenAI response missing output text.');
-  }
-
-  const parsed = JSON.parse(outputText);
-  const rawChecks = parsed?.checks || {};
-  const checks = {
-    safety: {
-      status: normalizeStatus(rawChecks?.safety?.status, ['pass', 'fail']),
-      message: rawChecks?.safety?.message || '安全检查完成。'
-    },
-    utility: {
-      status: normalizeStatus(rawChecks?.utility?.status, ['pass', 'fail']),
-      message: rawChecks?.utility?.message || '效用检查完成。'
-    },
-    expansion: {
-      status: normalizeStatus(rawChecks?.expansion?.status, ['pass', 'warn']),
-      message: rawChecks?.expansion?.message || '扩展检查完成。'
-    },
-    builder: {
-      status: normalizeStatus(rawChecks?.builder?.status, ['pass', 'fail']),
-      message: rawChecks?.builder?.message || '构建检查完成。'
+  try {
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(`OpenAI request failed: ${response.status} ${errorText}`);
     }
-  };
 
-  return {
-    checks,
-    sanitizedInput: {
-      worldDesc: parsed?.sanitizedInput?.worldDesc || sanitizePrompt(worldDescRaw, { removeTaskDirectives: true }),
-      charDesc: parsed?.sanitizedInput?.charDesc || sanitizePrompt(charDescRaw)
+    const data = await response.json();
+    const outputText = extractResponseText(data);
+    if (!outputText) {
+      throw new Error('OpenAI response missing output text.');
     }
-  };
+
+    addLlmLog({
+      id: nanoid(8),
+      createdAt: startedAt,
+      model: CHECK_MODEL,
+      input: inputPayload,
+      output: outputText
+    });
+
+    const parsed = JSON.parse(outputText);
+    const rawChecks = parsed?.checks || {};
+    const checks = {
+      safety: {
+        status: normalizeStatus(rawChecks?.safety?.status, ['pass', 'fail']),
+        message: rawChecks?.safety?.message || '安全检查完成。'
+      },
+      utility: {
+        status: normalizeStatus(rawChecks?.utility?.status, ['pass', 'fail']),
+        message: rawChecks?.utility?.message || '效用检查完成。'
+      },
+      expansion: {
+        status: normalizeStatus(rawChecks?.expansion?.status, ['pass', 'warn']),
+        message: rawChecks?.expansion?.message || '扩展检查完成。'
+      },
+      builder: {
+        status: normalizeStatus(rawChecks?.builder?.status, ['pass', 'fail']),
+        message: rawChecks?.builder?.message || '构建检查完成。'
+      }
+    };
+
+    return {
+      checks,
+      sanitizedInput: {
+        worldDesc:
+          parsed?.sanitizedInput?.worldDesc ||
+          sanitizePrompt(worldDescRaw, { removeTaskDirectives: true }),
+        charDesc: parsed?.sanitizedInput?.charDesc || sanitizePrompt(charDescRaw)
+      }
+    };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    addLlmLog({
+      id: nanoid(8),
+      createdAt: startedAt,
+      model: CHECK_MODEL,
+      input: inputPayload,
+      output: `ERROR: ${message}`,
+      error: true
+    });
+    throw error;
+  }
 };
 
 const allocateStats = (settings) => {
@@ -353,6 +387,10 @@ const baseTaskLine = (questMaster) =>
 
 app.get('/api/health', (req, res) => {
   res.json({ ok: true });
+});
+
+app.get('/api/logs', (req, res) => {
+  res.json({ logs: llmLogs });
 });
 
 app.post('/api/genesis', async (req, res) => {
