@@ -54,7 +54,10 @@ const sanitizePrompt = (text, options = {}) => {
 };
 
 const OPENAI_API_URL = 'https://api.openai.com/v1/responses';
+const OPENAI_IMAGE_URL = 'https://api.openai.com/v1/images';
 const CHECK_MODEL = 'gpt-5-mini';
+const GENERATION_MODEL = 'gpt-5.2';
+const IMAGE_MODEL = 'gpt-image-1.5';
 
 const getApiKey = (req) => req.headers['x-api-key'] || process.env.OPENAI_API_KEY;
 
@@ -75,6 +78,83 @@ const addLlmLog = (entry) => {
 
 const normalizeStatus = (value, allowed, fallback = 'fail') =>
   allowed.includes(value) ? value : fallback;
+
+const parseJsonOutput = (outputText) => {
+  const trimmed = outputText?.trim();
+  if (!trimmed) throw new Error('OpenAI response missing output text.');
+  return JSON.parse(trimmed);
+};
+
+const callJsonModel = async ({ apiKey, model, systemPrompt, userPayload, logTag }) => {
+  const startedAt = new Date().toISOString();
+  const payload = {
+    model,
+    text: { format: { type: 'json_object' } },
+    input: [
+      {
+        role: 'system',
+        content: [{ type: 'input_text', text: systemPrompt }]
+      },
+      {
+        role: 'user',
+        content: [{ type: 'input_text', text: JSON.stringify(userPayload) }]
+      }
+    ]
+  };
+
+  const response = await fetch(OPENAI_API_URL, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${apiKey}`
+    },
+    body: JSON.stringify(payload)
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`OpenAI request failed: ${response.status} ${errorText}`);
+  }
+
+  const data = await response.json();
+  const outputText = extractResponseText(data);
+
+  addLlmLog({
+    id: nanoid(8),
+    createdAt: startedAt,
+    model,
+    input: { tag: logTag, payload: userPayload },
+    output: outputText
+  });
+
+  return parseJsonOutput(outputText);
+};
+
+const callImageModel = async ({ apiKey, prompt, size }) => {
+  const response = await fetch(OPENAI_IMAGE_URL, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${apiKey}`
+    },
+    body: JSON.stringify({
+      model: IMAGE_MODEL,
+      prompt,
+      size,
+      response_format: 'b64_json'
+    })
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`OpenAI image request failed: ${response.status} ${errorText}`);
+  }
+
+  const data = await response.json();
+  const b64 = data?.data?.[0]?.b64_json;
+  if (!b64) throw new Error('OpenAI image response missing image data.');
+  return `data:image/png;base64,${b64}`;
+};
 
 const runPromptChecks = async (worldDescRaw, charDescRaw, apiKey) => {
   const startedAt = new Date().toISOString();
@@ -292,60 +372,176 @@ const buildWorldBuilder = (settings, input) => {
   };
 };
 
-const buildNarrator = (input, worldBuilder) => ({
-  origin_story: `你出生在${worldBuilder.map[0].name}的边缘街区，曾在${worldBuilder.faction_3.name}的船团做过短暂学徒。${input.charDesc || '你始终记得那场改变命运的风暴。'}`
-});
+const generateWorldBuilder = async ({ apiKey, input, settings }) => {
+  const systemPrompt = `你是世界构建器（World Builder Agent）。只输出 JSON，不要输出任何多余文字或代码块。
 
-const buildQuestMaster = (input, worldBuilder) => {
-  const taskCount = rng(5, 8);
-  const tasks = Array.from({ length: taskCount }, (_, index) => ({
-    id: index + 1,
-    summary: `任务 ${index + 1}：前往${worldBuilder.map[index % worldBuilder.map.length].name}，调查与${worldBuilder.factions[index % 4].name}有关的异动。`
-  }));
+根据输入内容生成世界构建结果，JSON 必须包含：
+- world_setting: 详细世界观补全（中文，2-4 段）
+- factions: 4 个主要势力的简述数组，每个元素包含 name 与 summary
+- map: 8~12 个地点数组，每个元素包含 {id, name, x, y, type}，x/y 为 0-100 的整数，type 只能是 start|neutral|danger|secret
+- faction_1~faction_4: 四个势力的详细设定对象（background, territory, conflicts, abilities, organization）
+- stats_allocation: {str, dex, int, cha} 总和必须为 15
+- inventory: 初始道具数组（3-6 项）
+- Power_level: 一段描述当前世界的魔法/科技/武力水平，并举 1-2 个例子
+- pic_style: 3-6 个词，表示绘画资产风格
+- character_appearance: 一段外貌描述（用于头像生成）
+
+注意：输出必须紧扣用户世界观与角色描述，避免模板化与默认措辞。`;
+
+  const userPayload = {
+    worldDesc: input.worldDesc,
+    charDesc: input.charDesc,
+    settings
+  };
+
+  const raw = await callJsonModel({
+    apiKey,
+    model: GENERATION_MODEL,
+    systemPrompt,
+    userPayload,
+    logTag: 'world_builder'
+  });
+
+  const fallbackStats = allocateStats(settings);
   return {
-    task_num: taskCount,
-    final_goal: `协助${worldBuilder.faction_1.name}赢得关键战役，获得影响世界格局的席位。`,
-    tasks
+    ...raw,
+    stats_allocation: normalizeStats(raw?.stats_allocation, fallbackStats),
+    map: normalizeMapNodes(raw?.map),
+    factions: Array.isArray(raw?.factions) ? raw.factions.slice(0, 4) : [],
+    pic_style: Array.isArray(raw?.pic_style) ? raw.pic_style.slice(0, 6) : ['氛围感']
   };
 };
 
-const buildSkillMaster = (worldBuilder) => ({
-  skill: ['雾影潜行', '短距跃迁', '星环解读'],
-  item: worldBuilder.inventory
-});
+const generateNarrator = async ({ apiKey, input, worldBuilder }) => {
+  const systemPrompt = `你是身份与剧情编排器中的 Narrator。只输出 JSON，不要输出任何多余文字。
+输出格式：
+{"origin_story":"..."}
+请基于世界观、势力信息与人物描述，写出合理出身故事，中文 120-220 字。`;
+  return callJsonModel({
+    apiKey,
+    model: GENERATION_MODEL,
+    systemPrompt,
+    userPayload: { input, worldBuilder },
+    logTag: 'narrator'
+  });
+};
 
-const buildAssets = (worldBuilder) => {
-  const avatarSvg = `data:image/svg+xml;utf8,${encodeURIComponent(`
-    <svg xmlns="http://www.w3.org/2000/svg" width="256" height="256">
-      <defs>
-        <linearGradient id="g" x1="0" x2="1" y1="0" y2="1">
-          <stop offset="0%" stop-color="#22d3ee" />
-          <stop offset="100%" stop-color="#6366f1" />
-        </linearGradient>
-      </defs>
-      <rect width="256" height="256" fill="#0f172a" />
-      <circle cx="128" cy="128" r="100" fill="url(#g)" opacity="0.9" />
-      <text x="128" y="140" font-size="56" text-anchor="middle" fill="#0f172a" font-family="sans-serif">L</text>
-    </svg>
-  `)}`;
+const generateQuestMaster = async ({ apiKey, input, worldBuilder }) => {
+  const systemPrompt = `你是身份与剧情编排器中的 Quest Master。只输出 JSON。
+生成一条线性主线任务（5-8 个节点），并给出最终势力目标。
+输出结构：
+{
+  "task_num": 5-8,
+  "task_1": "...",
+  "task_2": "...",
+  "...": "...",
+  "final_goal": "..."
+}
+任务描述为一小段中文。`;
+  return callJsonModel({
+    apiKey,
+    model: GENERATION_MODEL,
+    systemPrompt,
+    userPayload: { input, worldBuilder },
+    logTag: 'quest_master'
+  });
+};
 
-  const mapSvg = `data:image/svg+xml;utf8,${encodeURIComponent(`
-    <svg xmlns="http://www.w3.org/2000/svg" width="512" height="320">
-      <rect width="512" height="320" fill="#0f172a" />
-      <rect x="24" y="24" width="464" height="272" fill="#111827" stroke="#22d3ee" stroke-width="2" />
-      <text x="256" y="60" font-size="18" text-anchor="middle" fill="#94a3b8" font-family="sans-serif">世界概要地图</text>
-      <text x="256" y="92" font-size="12" text-anchor="middle" fill="#64748b" font-family="sans-serif">${worldBuilder.pic_style.join(' · ')}</text>
-    </svg>
-  `)}`;
+const generateSkillMaster = async ({ apiKey, input, worldBuilder }) => {
+  const systemPrompt = `你是身份与剧情编排器中的 Skill Master。只输出 JSON。
+输出结构：
+{
+  "skill": ["技能1","技能2","技能3"],
+  "item": ["道具1","道具2","道具3"]
+}
+技能与道具必须与世界观一致。`;
+  return callJsonModel({
+    apiKey,
+    model: GENERATION_MODEL,
+    systemPrompt,
+    userPayload: { input, worldBuilder },
+    logTag: 'skill_master'
+  });
+};
+
+const normalizeStats = (stats, fallback) => {
+  const base = { ...fallback };
+  if (!stats || typeof stats !== 'object') return base;
+  ['str', 'dex', 'int', 'cha'].forEach((key) => {
+    const value = Number(stats[key]);
+    if (Number.isFinite(value)) base[key] = Math.max(0, Math.round(value));
+  });
+  const total = base.str + base.dex + base.int + base.cha;
+  if (total === 15) return base;
+  const diff = 15 - total;
+  const order = ['str', 'dex', 'int', 'cha'];
+  let idx = 0;
+  let remaining = Math.abs(diff);
+  while (remaining > 0) {
+    const key = order[idx % order.length];
+    base[key] = Math.max(0, base[key] + Math.sign(diff));
+    remaining -= 1;
+    idx += 1;
+  }
+  return base;
+};
+
+const normalizeMapNodes = (nodes) => {
+  if (!Array.isArray(nodes)) return buildMapNodes(rng(8, 12));
+  return nodes.slice(0, 12).map((node, index) => ({
+    id: Number(node?.id) || index + 1,
+    name: node?.name || `区域 ${index + 1}`,
+    x: Math.min(100, Math.max(0, Number(node?.x) || rng(10, 90))),
+    y: Math.min(100, Math.max(0, Number(node?.y) || rng(10, 90))),
+    type: node?.type || (index === 0 ? 'start' : index % 4 === 0 ? 'danger' : 'neutral')
+  }));
+};
+
+const normalizeQuestMaster = (questMaster, fallbackTasks) => {
+  const tasks = [];
+  if (Array.isArray(questMaster?.tasks)) {
+    questMaster.tasks.forEach((task, index) => {
+      tasks.push({
+        id: Number(task?.id) || index + 1,
+        summary: task?.summary || task?.text || `任务 ${index + 1}`
+      });
+    });
+  } else if (Number.isFinite(questMaster?.task_num)) {
+    const count = Math.min(8, Math.max(5, questMaster.task_num));
+    for (let i = 1; i <= count; i += 1) {
+      tasks.push({ id: i, summary: questMaster[`task_${i}`] || `任务 ${i}` });
+    }
+  }
+
+  const safeTasks = tasks.length ? tasks : fallbackTasks;
+  return {
+    task_num: safeTasks.length,
+    final_goal: questMaster?.final_goal || '最终目标尚待明确。',
+    tasks: safeTasks
+  };
+};
+
+const buildAssets = async (worldBuilder, apiKey) => {
+  const avatarPrompt = `角色头像：${worldBuilder.character_appearance || '神秘旅者，目光坚定'}。风格关键词：${worldBuilder.pic_style.join('，')}。半身近景，单一角色，清晰面部细节。`;
+  const mapPlaces = worldBuilder.map
+    .slice(0, 10)
+    .map((node) => node.name)
+    .join('、');
+  const mapPrompt = `世界地图：包含${mapPlaces}等地点，适度标注文字说明。风格关键词：${worldBuilder.pic_style.join('，')}。简洁清晰、易读。`;
+
+  const [avatarImage, mapImage] = await Promise.all([
+    callImageModel({ apiKey, prompt: avatarPrompt, size: '512x512' }),
+    callImageModel({ apiKey, prompt: mapPrompt, size: '1024x768' })
+  ]);
 
   return {
     avatar: {
-      prompt: `角色头像，风格：${worldBuilder.pic_style.join('，')}`,
-      image: avatarSvg
+      prompt: avatarPrompt,
+      image: avatarImage
     },
     map: {
-      prompt: `地图概览，风格：${worldBuilder.pic_style.join('，')}`,
-      image: mapSvg
+      prompt: mapPrompt,
+      image: mapImage
     }
   };
 };
@@ -462,11 +658,40 @@ app.post('/api/genesis', async (req, res) => {
     }
   };
 
-  const worldBuilder = buildWorldBuilder(input.settings, input);
-  const narrator = buildNarrator(input, worldBuilder);
-  const questMaster = buildQuestMaster(input, worldBuilder);
-  const skillMaster = buildSkillMaster(worldBuilder);
-  const assets = buildAssets(worldBuilder);
+  let worldBuilder;
+  let narrator;
+  let questMasterRaw;
+  let skillMaster;
+  let assets;
+  try {
+    worldBuilder = await generateWorldBuilder({
+      apiKey,
+      input,
+      settings: input.settings
+    });
+
+    const fallbackTasks = worldBuilder.map.slice(0, 5).map((node, index) => ({
+      id: index + 1,
+      summary: `任务 ${index + 1}：前往${node.name}，调查与${worldBuilder.factions[index % 4]?.name || '未知势力'}有关的异动。`
+    }));
+
+    [narrator, questMasterRaw, skillMaster] = await Promise.all([
+      generateNarrator({ apiKey, input, worldBuilder }),
+      generateQuestMaster({ apiKey, input, worldBuilder }),
+      generateSkillMaster({ apiKey, input, worldBuilder })
+    ]);
+
+    questMasterRaw = normalizeQuestMaster(questMasterRaw, fallbackTasks);
+    assets = await buildAssets(worldBuilder, apiKey);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return res.status(502).json({
+      ok: false,
+      error: `创世纪生成失败：${message}`
+    });
+  }
+
+  const questMaster = questMasterRaw;
 
   const character = buildCharacter(input, worldBuilder, assets);
   const world = buildWorld(worldBuilder);
