@@ -54,10 +54,10 @@ const sanitizePrompt = (text, options = {}) => {
 };
 
 const OPENAI_API_URL = 'https://api.openai.com/v1/responses';
-const OPENAI_IMAGE_URL = 'https://api.openai.com/v1/images';
+const OPENAI_IMAGE_URL = 'https://api.openai.com/v1/images/generations';
 const CHECK_MODEL = 'gpt-5-mini';
 const GENERATION_MODEL = 'gpt-5.2';
-const IMAGE_MODEL = 'gpt-image-1.5';
+const IMAGE_MODEL = 'gpt-image-1';
 
 const getApiKey = (req) => req.headers['x-api-key'] || process.env.OPENAI_API_KEY;
 
@@ -154,6 +154,29 @@ const callImageModel = async ({ apiKey, prompt, size }) => {
   const b64 = data?.data?.[0]?.b64_json;
   if (!b64) throw new Error('OpenAI image response missing image data.');
   return `data:image/png;base64,${b64}`;
+};
+
+const buildPlaceholderImage = ({ label, width, height }) => {
+  const safeLabel = label?.replace(/</g, '&lt;').replace(/>/g, '&gt;') || 'IMAGE';
+  const svg = `
+    <svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}">
+      <defs>
+        <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+          <stop offset="0%" stop-color="#0f172a" />
+          <stop offset="100%" stop-color="#1e293b" />
+        </linearGradient>
+      </defs>
+      <rect width="100%" height="100%" fill="url(#bg)" />
+      <rect x="6%" y="6%" width="88%" height="88%" fill="none" stroke="#38bdf8" stroke-width="3" stroke-dasharray="10 8" />
+      <text x="50%" y="50%" fill="#e2e8f0" font-family="Arial, sans-serif" font-size="24" text-anchor="middle" dominant-baseline="middle">
+        ${safeLabel}
+      </text>
+      <text x="50%" y="62%" fill="#94a3b8" font-family="Arial, sans-serif" font-size="14" text-anchor="middle" dominant-baseline="middle">
+        image unavailable
+      </text>
+    </svg>
+  `;
+  return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg.trim())}`;
 };
 
 const runPromptChecks = async (worldDescRaw, charDescRaw, apiKey) => {
@@ -579,10 +602,19 @@ const buildAssets = async (worldBuilder, apiKey) => {
     .join('、');
   const mapPrompt = `世界地图：包含${mapPlaces}等地点，适度标注文字说明。风格关键词：${worldBuilder.pic_style.join('，')}。简洁清晰、易读。`;
 
-  const [avatarImage, mapImage] = await Promise.all([
-    callImageModel({ apiKey, prompt: avatarPrompt, size: '512x512' }),
-    callImageModel({ apiKey, prompt: mapPrompt, size: '1024x768' })
+  const [avatarResult, mapResult] = await Promise.allSettled([
+    callImageModel({ apiKey, prompt: avatarPrompt, size: '1024x1024' }),
+    callImageModel({ apiKey, prompt: mapPrompt, size: '1024x1024' })
   ]);
+
+  const avatarImage =
+    avatarResult.status === 'fulfilled'
+      ? avatarResult.value
+      : buildPlaceholderImage({ label: 'Avatar', width: 1024, height: 1024 });
+  const mapImage =
+    mapResult.status === 'fulfilled'
+      ? mapResult.value
+      : buildPlaceholderImage({ label: 'Map', width: 1024, height: 1024 });
 
   return {
     avatar: {
