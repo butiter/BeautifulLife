@@ -464,16 +464,14 @@ const runPromptChecks = async ({ worldDescRaw, charDescRaw, apiKey, provider, mo
       apiKey,
       model,
       provider,
-      systemPrompt: `你是创世纪输入审查与整理员。你的核心目标是审核玩家输入，并将玩家输入过滤为安全的版本。
+      systemPrompt: `你是创世纪输入审查员。你的核心目标是审核玩家输入的安全性与可用性。
       请仅输出 JSON 对象，不要输出任何多余文字。
       我将会给你两段文本，分别是用户的世界描述输入和用户的角色描述输入。
-      你需要完成四项检查并给出新的过滤后的世界观描述/角色描述：
+      你需要完成四项检查并给出判定结果：
         1) safety：若包含攻击/入侵/绕过/漏洞/脚本注入等黑客内容，或政治/色情/赌博/恐怖/毒品/枪支/邪教/极端等敏感主题，则 fail；否则 pass。
         2) utility：若世界观描述与角色描述足够明确、可用于生成故事，则 pass；否则 fail。
         3) expansion：若包含数值化属性、强指向性任务/目标/必须完成的指令等，应标记 warn；否则 pass。
         4) builder：若输入足以直接进入世界构建（无需继续追问），则 pass；否则 fail。
-        同时返回 sanitizedInput。sanitizedInput是过滤后的世界描述与角色描述（而不是审查结果）。
-        你需要在保留用户意图的前提下，移除攻击/敏感内容与过强指令化表述，必要时简化数值化词汇，也可以简单扩展。
       输出的 JSON 结构必须为（下面只展示结构示例，value 只是占位，禁止照抄！！！！！！！）：  
       {
         "checks": {
@@ -481,16 +479,11 @@ const runPromptChecks = async ({ worldDescRaw, charDescRaw, apiKey, provider, mo
           "utility":  { "status": "pass|fail", "message": "这里填效用判定说明" },
           "expansion":{ "status": "pass|warn", "message": "这里填扩展性判定说明" },
           "builder":  { "status": "pass|fail", "message": "这里填是否可直接构建的说明" }
-        },
-        "sanitizedInput": {
-          "worldDesc": "<根据用户 worldDesc 清理后的世界描述>",
-          "charDesc":  "<根据用户 charDesc 清理后的角色描述>"
         }
       }
 
       注意：
-      1. 你必须根据用户输入实际生成 sanitizedInput.worldDesc / sanitizedInput.charDesc。
-      2. 不允许原样返回示例里的占位字符串（例如以“这里填……”或带尖括号 <> 的内容）。
+      1. 不允许原样返回示例里的占位字符串（例如以“这里填……”或带尖括号 <> 的内容）。
 `,
       userPayload: {
         worldDesc: worldDescRaw,
@@ -520,13 +513,7 @@ const runPromptChecks = async ({ worldDescRaw, charDescRaw, apiKey, provider, mo
     };
 
     return {
-      checks,
-      sanitizedInput: {
-        worldDesc:
-          parsed?.sanitizedInput?.worldDesc ||
-          sanitizePrompt(worldDescRaw, { removeTaskDirectives: true }),
-        charDesc: parsed?.sanitizedInput?.charDesc || sanitizePrompt(charDescRaw)
-      }
+      checks
     };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
@@ -556,10 +543,6 @@ const runGenesisChecks = async ({ worldDescRaw, charDescRaw, modelSettings }) =>
         utility: { status: 'fail', message: '缺少 API Key，无法执行效用检查。' },
         expansion: { status: 'fail', message: '缺少 API Key，无法执行扩展检查。' },
         builder: { status: 'fail', message: '缺少 API Key，无法执行构建检查。' }
-      },
-      sanitizedInput: {
-        worldDesc: sanitizePrompt(worldDescRaw, { removeTaskDirectives: true }),
-        charDesc: sanitizePrompt(charDescRaw)
       }
     };
   }
@@ -582,15 +565,11 @@ const runGenesisChecks = async ({ worldDescRaw, charDescRaw, modelSettings }) =>
         utility: { status: 'fail', message: '效用检查失败。' },
         expansion: { status: 'fail', message: '扩展检查失败。' },
         builder: { status: 'fail', message: '构建检查失败。' }
-      },
-      sanitizedInput: {
-        worldDesc: sanitizePrompt(worldDescRaw, { removeTaskDirectives: true }),
-        charDesc: sanitizePrompt(charDescRaw)
       }
     };
   }
 
-  const { checks, sanitizedInput } = checkPayload;
+  const { checks } = checkPayload;
   const shouldBlock =
     checks.safety.status !== 'pass' ||
     checks.utility.status !== 'pass' ||
@@ -598,8 +577,43 @@ const runGenesisChecks = async ({ worldDescRaw, charDescRaw, modelSettings }) =>
 
   return {
     ok: !shouldBlock,
-    checks,
-    sanitizedInput
+    checks
+  };
+};
+
+const optimizeGenesisInput = async ({ worldDescRaw, charDescRaw, apiKey, provider, model }) => {
+  const systemPrompt = `你是创世纪文本优化器。只输出 JSON，不要输出任何多余文字或代码块。
+你将收到玩家的世界描述与角色描述，请优化整理文本：
+1) 保留原始意图，增强故事感与叙事连贯性。
+2) 过滤过于精确的描述（如具体数值、坐标、绝对命令、过度细节）。
+3) 统一人称为第三人称叙述，避免自我指令化语气。
+4) 输出精炼且可用于生成世界与角色设定的文本。
+5) 提取或生成玩家名字：如果输入中明确出现名字，直接使用；如果没有，则根据故事设定起一个不突兀的名字。
+
+输出 JSON 结构：
+{
+  "playerName": "...",
+  "worldDesc": "...",
+  "charDesc": "..."
+}`;
+
+  const parsed = await callJsonModel({
+    apiKey,
+    model,
+    provider,
+    systemPrompt,
+    userPayload: {
+      worldDesc: worldDescRaw,
+      charDesc: charDescRaw
+    },
+    logTag: 'genesis_optimizer'
+  });
+
+  return {
+    playerName: parsed?.playerName || `旅者${rng(100, 999)}`,
+    worldDesc:
+      parsed?.worldDesc || sanitizePrompt(worldDescRaw, { removeTaskDirectives: true }),
+    charDesc: parsed?.charDesc || sanitizePrompt(charDescRaw)
   };
 };
 
@@ -774,20 +788,31 @@ const generateQuestMaster = async ({ apiKey, input, worldBuilder, provider, mode
   });
 };
 
-const generateSkillMaster = async ({ apiKey, input, worldBuilder, provider, model }) => {
+const generateSkillMaster = async ({ apiKey, input, provider, model }) => {
   const systemPrompt = `你是身份与剧情编排器中的 Skill Master。只输出 JSON。
 输出结构：
 {
-  "skill": ["技能1","技能2","技能3"],
-  "item": ["道具1","道具2","道具3"]
+  "skill": [
+    { "name": "技能1", "effect": "效果描述" },
+    { "name": "技能2", "effect": "效果描述" },
+    { "name": "技能3", "effect": "效果描述" }
+  ],
+  "item": [
+    { "name": "道具1", "effect": "效果描述" },
+    { "name": "道具2", "effect": "效果描述" },
+    { "name": "道具3", "effect": "效果描述" }
+  ]
 }
-技能与道具必须与世界观一致。`;
+技能与道具必须与世界观一致，效果描述需清楚说明用途或增益。`;
   return callJsonModel({
     apiKey,
     model,
     provider,
     systemPrompt,
-    userPayload: { input, worldBuilder },
+    userPayload: {
+      worldDesc: input.worldDesc,
+      charDesc: input.charDesc
+    },
     logTag: 'skill_master'
   });
 };
@@ -952,7 +977,7 @@ const buildAssets = async ({ worldBuilder, apiKey, provider, model }) => {
 };
 
 const buildCharacter = (input, worldBuilder, assets) => ({
-  name: `流浪者 ${rng(100, 999)}`,
+  name: input.playerName || `流浪者 ${rng(100, 999)}`,
   title: '星港游民',
   avatarSeed: rng(1, 9999),
   portrait: assets.avatar.image,
@@ -1000,9 +1025,39 @@ const buildGenesisPayload = async ({ input, modelSettings }) => {
     throw new Error('缺少图像生成 API Key。');
   }
 
+  let optimizedInput;
+  try {
+    optimizedInput = await optimizeGenesisInput({
+      worldDescRaw: input.worldDesc,
+      charDescRaw: input.charDesc,
+      apiKey: generationApiKey,
+      provider: highQuality.provider,
+      model: highQuality.model
+    });
+    addProcessLog('创世纪输入优化完成', {
+      provider: highQuality.provider,
+      model: highQuality.model
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    addProcessLog('创世纪输入优化失败，使用本地清理结果', { error: message });
+    optimizedInput = {
+      playerName: `旅者${rng(100, 999)}`,
+      worldDesc: sanitizePrompt(input.worldDesc, { removeTaskDirectives: true }),
+      charDesc: sanitizePrompt(input.charDesc)
+    };
+  }
+
+  const generationInput = {
+    ...optimizedInput,
+    rawWorldDesc: input.worldDesc,
+    rawCharDesc: input.charDesc,
+    settings: input.settings
+  };
+
   const worldBuilder = await generateWorldBuilder({
     apiKey: generationApiKey,
-    input,
+    input: generationInput,
     settings: input.settings,
     provider: highQuality.provider,
     model: highQuality.model
@@ -1018,22 +1073,21 @@ const buildGenesisPayload = async ({ input, modelSettings }) => {
   const [narrator, questMaster, skillMaster] = await Promise.all([
     generateNarrator({
       apiKey: generationApiKey,
-      input,
+      input: generationInput,
       worldBuilder,
       provider: highQuality.provider,
       model: highQuality.model
     }),
     generateQuestMaster({
       apiKey: generationApiKey,
-      input,
+      input: generationInput,
       worldBuilder,
       provider: highQuality.provider,
       model: highQuality.model
     }),
     generateSkillMaster({
       apiKey: generationApiKey,
-      input,
-      worldBuilder,
+      input: generationInput,
       provider: highQuality.provider,
       model: highQuality.model
     })
@@ -1052,13 +1106,13 @@ const buildGenesisPayload = async ({ input, modelSettings }) => {
     model: imageSelection.model
   });
 
-  const character = buildCharacter(input, worldBuilder, assets);
+  const character = buildCharacter(generationInput, worldBuilder, assets);
   const world = buildWorld(worldBuilder);
   const firstQuest = buildFirstQuest(questMasterRaw);
   addProcessLog('创世纪构建完成');
 
   return {
-    playerInput: input,
+    playerInput: generationInput,
     worldBuilder,
     multiAgent: {
       narrator,
@@ -1238,10 +1292,9 @@ app.post('/api/genesis/build', async (req, res) => {
 
   const worldDescRaw = payload.worldDesc?.trim() || '';
   const charDescRaw = payload.charDesc?.trim() || '';
-  const sanitized = payload.sanitizedInput || {};
   const input = {
-    worldDesc: sanitized.worldDesc || worldDescRaw,
-    charDesc: sanitized.charDesc || charDescRaw,
+    worldDesc: worldDescRaw,
+    charDesc: charDescRaw,
     settings: {
       magic: payload.settings?.magic || 'mid',
       physics: payload.settings?.physics || 'mid',
@@ -1315,8 +1368,8 @@ app.post('/api/genesis', async (req, res) => {
   }
 
   const input = {
-    worldDesc: checkPayload.sanitizedInput.worldDesc || worldDescRaw,
-    charDesc: checkPayload.sanitizedInput.charDesc || charDescRaw,
+    worldDesc: worldDescRaw,
+    charDesc: charDescRaw,
     settings: {
       magic: settings.magic || 'mid',
       physics: settings.physics || 'mid',
