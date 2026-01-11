@@ -464,16 +464,14 @@ const runPromptChecks = async ({ worldDescRaw, charDescRaw, apiKey, provider, mo
       apiKey,
       model,
       provider,
-      systemPrompt: `你是创世纪输入审查与整理员。你的核心目标是审核玩家输入，并将玩家输入过滤为安全的版本。
+      systemPrompt: `你是创世纪输入审查员。你的核心目标是审核玩家输入。
       请仅输出 JSON 对象，不要输出任何多余文字。
       我将会给你两段文本，分别是用户的世界描述输入和用户的角色描述输入。
-      你需要完成四项检查并给出新的过滤后的世界观描述/角色描述：
+      你需要完成四项检查：
         1) safety：若包含攻击/入侵/绕过/漏洞/脚本注入等黑客内容，或政治/色情/赌博/恐怖/毒品/枪支/邪教/极端等敏感主题，则 fail；否则 pass。
         2) utility：若世界观描述与角色描述足够明确、可用于生成故事，则 pass；否则 fail。
         3) expansion：若包含数值化属性、强指向性任务/目标/必须完成的指令等，应标记 warn；否则 pass。
         4) builder：若输入足以直接进入世界构建（无需继续追问），则 pass；否则 fail。
-        同时返回 sanitizedInput。sanitizedInput是过滤后的世界描述与角色描述（而不是审查结果）。
-        你需要在保留用户意图的前提下，移除攻击/敏感内容与过强指令化表述，必要时简化数值化词汇，也可以简单扩展。
       输出的 JSON 结构必须为（下面只展示结构示例，value 只是占位，禁止照抄！！！！！！！）：  
       {
         "checks": {
@@ -481,16 +479,11 @@ const runPromptChecks = async ({ worldDescRaw, charDescRaw, apiKey, provider, mo
           "utility":  { "status": "pass|fail", "message": "这里填效用判定说明" },
           "expansion":{ "status": "pass|warn", "message": "这里填扩展性判定说明" },
           "builder":  { "status": "pass|fail", "message": "这里填是否可直接构建的说明" }
-        },
-        "sanitizedInput": {
-          "worldDesc": "<根据用户 worldDesc 清理后的世界描述>",
-          "charDesc":  "<根据用户 charDesc 清理后的角色描述>"
         }
       }
 
       注意：
-      1. 你必须根据用户输入实际生成 sanitizedInput.worldDesc / sanitizedInput.charDesc。
-      2. 不允许原样返回示例里的占位字符串（例如以“这里填……”或带尖括号 <> 的内容）。
+      1. 不允许原样返回示例里的占位字符串（例如以“这里填……”）。
 `,
       userPayload: {
         worldDesc: worldDescRaw,
@@ -519,15 +512,7 @@ const runPromptChecks = async ({ worldDescRaw, charDescRaw, apiKey, provider, mo
       }
     };
 
-    return {
-      checks,
-      sanitizedInput: {
-        worldDesc:
-          parsed?.sanitizedInput?.worldDesc ||
-          sanitizePrompt(worldDescRaw, { removeTaskDirectives: true }),
-        charDesc: parsed?.sanitizedInput?.charDesc || sanitizePrompt(charDescRaw)
-      }
-    };
+    return { checks };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     addLlmLog({
@@ -556,10 +541,6 @@ const runGenesisChecks = async ({ worldDescRaw, charDescRaw, modelSettings }) =>
         utility: { status: 'fail', message: '缺少 API Key，无法执行效用检查。' },
         expansion: { status: 'fail', message: '缺少 API Key，无法执行扩展检查。' },
         builder: { status: 'fail', message: '缺少 API Key，无法执行构建检查。' }
-      },
-      sanitizedInput: {
-        worldDesc: sanitizePrompt(worldDescRaw, { removeTaskDirectives: true }),
-        charDesc: sanitizePrompt(charDescRaw)
       }
     };
   }
@@ -582,15 +563,11 @@ const runGenesisChecks = async ({ worldDescRaw, charDescRaw, modelSettings }) =>
         utility: { status: 'fail', message: '效用检查失败。' },
         expansion: { status: 'fail', message: '扩展检查失败。' },
         builder: { status: 'fail', message: '构建检查失败。' }
-      },
-      sanitizedInput: {
-        worldDesc: sanitizePrompt(worldDescRaw, { removeTaskDirectives: true }),
-        charDesc: sanitizePrompt(charDescRaw)
       }
     };
   }
 
-  const { checks, sanitizedInput } = checkPayload;
+  const { checks } = checkPayload;
   const shouldBlock =
     checks.safety.status !== 'pass' ||
     checks.utility.status !== 'pass' ||
@@ -598,9 +575,60 @@ const runGenesisChecks = async ({ worldDescRaw, charDescRaw, modelSettings }) =>
 
   return {
     ok: !shouldBlock,
-    checks,
-    sanitizedInput
+    checks
   };
+};
+
+const optimizeGenesisInput = async ({ worldDescRaw, charDescRaw, modelSettings }) => {
+  const resolvedSettings = getModelSettings({ modelSettings });
+  const highQuality = resolvedSettings.selections.textHigh;
+  const apiKey = getProviderApiKey(highQuality.provider, resolvedSettings);
+  const startedAt = new Date().toISOString();
+  const inputPayload = { worldDesc: worldDescRaw, charDesc: charDescRaw };
+
+  if (!apiKey) {
+    throw new Error('缺少高质量文本生成 API Key。');
+  }
+
+  try {
+    const parsed = await callJsonModel({
+      apiKey,
+      model: highQuality.model,
+      provider: highQuality.provider,
+      systemPrompt: `你是创世纪输入优化 agent。你的任务是整理并优化玩家的世界描述与角色描述。
+请仅输出 JSON 对象，不要输出任何多余文字。
+要求：
+1) 过滤过于精确或过度量化的细节，保留核心设定与氛围。
+2) 统一人称与叙述视角，使描述更连贯。
+3) 语言要有故事感，但避免强指令、硬性任务或具体数值。
+4) 必须保留玩家的核心意图与主题。
+输出 JSON 结构必须为：
+{
+  "worldDesc": "优化后的世界描述",
+  "charDesc": "优化后的角色描述"
+}`,
+      userPayload: inputPayload,
+      logTag: 'genesis_optimizer'
+    });
+
+    return {
+      worldDesc:
+        parsed?.worldDesc || sanitizePrompt(worldDescRaw, { removeTaskDirectives: true }),
+      charDesc: parsed?.charDesc || sanitizePrompt(charDescRaw)
+    };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    addLlmLog({
+      id: nanoid(8),
+      createdAt: startedAt,
+      model: highQuality.model,
+      input: { ...inputPayload, provider: highQuality.provider },
+      output: `ERROR: ${message}`,
+      error: true,
+      provider: highQuality.provider
+    });
+    throw error;
+  }
 };
 
 const allocateStats = (settings) => {
@@ -1238,23 +1266,32 @@ app.post('/api/genesis/build', async (req, res) => {
 
   const worldDescRaw = payload.worldDesc?.trim() || '';
   const charDescRaw = payload.charDesc?.trim() || '';
-  const sanitized = payload.sanitizedInput || {};
-  const input = {
-    worldDesc: sanitized.worldDesc || worldDescRaw,
-    charDesc: sanitized.charDesc || charDescRaw,
-    settings: {
-      magic: payload.settings?.magic || 'mid',
-      physics: payload.settings?.physics || 'mid',
-      tech: payload.settings?.tech || 'mid'
-    }
-  };
 
   try {
+    const optimizedInput = await optimizeGenesisInput({
+      worldDescRaw,
+      charDescRaw,
+      modelSettings
+    });
+    addProcessLog('创世纪输入优化完成');
+    const input = {
+      worldDesc: optimizedInput.worldDesc || worldDescRaw,
+      charDesc: optimizedInput.charDesc || charDescRaw,
+      settings: {
+        magic: payload.settings?.magic || 'mid',
+        physics: payload.settings?.physics || 'mid',
+        tech: payload.settings?.tech || 'mid'
+      }
+    };
     const buildPayload = await buildGenesisPayload({ input, modelSettings });
     addProcessLog('创世纪生成成功');
     return res.json({
       ok: true,
-      ...buildPayload
+      ...buildPayload,
+      playerInput: {
+        ...buildPayload.playerInput,
+        raw: { worldDesc: worldDescRaw, charDesc: charDescRaw }
+      }
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
@@ -1314,22 +1351,31 @@ app.post('/api/genesis', async (req, res) => {
     return res.status(statusCode).json(checkPayload);
   }
 
-  const input = {
-    worldDesc: checkPayload.sanitizedInput.worldDesc || worldDescRaw,
-    charDesc: checkPayload.sanitizedInput.charDesc || charDescRaw,
-    settings: {
-      magic: settings.magic || 'mid',
-      physics: settings.physics || 'mid',
-      tech: settings.tech || 'mid'
-    }
-  };
-
   try {
+    const optimizedInput = await optimizeGenesisInput({
+      worldDescRaw,
+      charDescRaw,
+      modelSettings
+    });
+    addProcessLog('创世纪输入优化完成');
+    const input = {
+      worldDesc: optimizedInput.worldDesc || worldDescRaw,
+      charDesc: optimizedInput.charDesc || charDescRaw,
+      settings: {
+        magic: settings.magic || 'mid',
+        physics: settings.physics || 'mid',
+        tech: settings.tech || 'mid'
+      }
+    };
     const buildPayload = await buildGenesisPayload({ input, modelSettings });
     res.json({
       ok: true,
       checks: checkPayload.checks,
-      ...buildPayload
+      ...buildPayload,
+      playerInput: {
+        ...buildPayload.playerInput,
+        raw: { worldDesc: worldDescRaw, charDesc: charDescRaw }
+      }
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
