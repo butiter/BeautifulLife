@@ -471,6 +471,7 @@ const SettingsView = ({ modelSettings, onSave }) => {
   const [testStatus, setTestStatus] = useState('idle');
   const [testResults, setTestResults] = useState([]);
   const [testError, setTestError] = useState('');
+  const [showTestInfo, setShowTestInfo] = useState(true);
 
   useEffect(() => {
     setDraft(normalizeModelSettings(modelSettings));
@@ -504,6 +505,7 @@ const SettingsView = ({ modelSettings, onSave }) => {
     setTestStatus('running');
     setTestResults([]);
     setTestError('');
+    setShowTestInfo(true);
     try {
       const response = await fetch(`${API_BASE}/api/settings/test`, {
         method: 'POST',
@@ -527,6 +529,9 @@ const SettingsView = ({ modelSettings, onSave }) => {
     handleSave();
     await handleTest();
   };
+
+  const hasTestInfo =
+    testStatus === 'running' || testError || (Array.isArray(testResults) && testResults.length > 0);
 
   const renderModelRow = (key, title, description) => {
     const selection = draft.selections[key];
@@ -618,22 +623,31 @@ const SettingsView = ({ modelSettings, onSave }) => {
           >
             保存并测试
           </button>
+          {hasTestInfo && (
+            <button
+              type="button"
+              onClick={() => setShowTestInfo((prev) => !prev)}
+              className="px-4 py-2 text-xs uppercase tracking-widest bg-slate-900/60 border border-slate-700 rounded-lg text-slate-400 hover:text-white hover:border-slate-500 transition"
+            >
+              {showTestInfo ? '隐藏测试信息' : '显示测试信息'}
+            </button>
+          )}
         </div>
 
-        {testStatus === 'running' && (
+        {showTestInfo && testStatus === 'running' && (
           <div className="flex items-center gap-2 text-sm text-cyan-300">
             <Spinner />
             正在测试 API 模型可用性...
           </div>
         )}
 
-        {testError && (
+        {showTestInfo && testError && (
           <div className="bg-rose-500/10 border border-rose-500/40 text-rose-200 rounded-xl p-4 text-sm">
             {testError}
           </div>
         )}
 
-        {testStatus === 'done' && (
+        {showTestInfo && testStatus === 'done' && (
           <div className="space-y-2">
             <h3 className="text-sm text-slate-200 font-semibold">测试结果</h3>
             <div className="grid gap-2">
@@ -654,6 +668,9 @@ const SettingsView = ({ modelSettings, onSave }) => {
                     <div className="text-slate-500">
                       {TEST_TYPE_LABELS[result.type] || result.type}
                     </div>
+                    {!result.ok && result.message && (
+                      <div className="text-rose-300">{result.message}</div>
+                    )}
                   </div>
                   <span
                     className={
