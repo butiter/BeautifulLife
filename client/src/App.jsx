@@ -195,7 +195,7 @@ const GenesisCheckItem = ({ title, status, detail }) => {
   );
 };
 
-const GameMap = ({ nodes, isOpen, toggle, mapImage }) => (
+const GameMap = ({ nodes, isOpen, toggle, mapImage, worldSetting }) => (
   <div
     className={`fixed top-0 right-0 h-full bg-slate-950 border-l border-slate-800 shadow-2xl transform transition-transform duration-500 ease-in-out z-50 ${
       isOpen ? 'translate-x-0' : 'translate-x-full'
@@ -218,7 +218,9 @@ const GameMap = ({ nodes, isOpen, toggle, mapImage }) => (
         alt="地图预览"
         className="w-full rounded-lg border border-slate-700"
       />
-      <p className="text-xs text-slate-500 mt-2">地图由资产生成器提供，仅用于世界概览。</p>
+      <p className="text-xs text-slate-400 mt-2 leading-relaxed">
+        {worldSetting || '地图由资产生成器提供，仅用于世界概览。'}
+      </p>
     </div>
 
     <div className="relative w-full h-full bg-[radial-gradient(ellipse_at_center,_var(--tw-gradient-stops))] from-slate-800 to-slate-950 p-6">
@@ -947,6 +949,8 @@ export default function App() {
   const [taskLine, setTaskLine] = useState([]);
   const [questLog, setQuestLog] = useState([]);
   const [currentOptions, setCurrentOptions] = useState([]);
+  const [taskGene, setTaskGene] = useState(null);
+  const [isTaskGeneLoading, setIsTaskGeneLoading] = useState(false);
   const [isLoadingTurn, setIsLoadingTurn] = useState(false);
   const [isMapOpen, setIsMapOpen] = useState(false);
   const [customInput, setCustomInput] = useState('');
@@ -989,6 +993,8 @@ export default function App() {
       setTaskLine(session.taskLine || []);
       setQuestLog(session.questLog || []);
       setCurrentOptions(session.currentOptions || []);
+      setTaskGene(session.taskGene || null);
+      setIsTaskGeneLoading(false);
       setPhase('GAME');
     } catch (error) {
       console.error('Failed to restore game session', error);
@@ -1007,7 +1013,8 @@ export default function App() {
       world,
       taskLine,
       questLog,
-      currentOptions
+      currentOptions,
+      taskGene
     };
     localStorage.setItem('genesisSession', JSON.stringify(snapshot));
   }, [
@@ -1020,7 +1027,8 @@ export default function App() {
     world,
     taskLine,
     questLog,
-    currentOptions
+    currentOptions,
+    taskGene
   ]);
 
   useEffect(() => {
@@ -1034,6 +1042,41 @@ export default function App() {
   }, [phase]);
 
   const buildHeaders = () => ({ 'Content-Type': 'application/json' });
+
+  const requestTaskGene = async ({ worldSetting, originStory, powerLevel, taskDesp }) => {
+    if (!worldSetting || !originStory || !powerLevel || !taskDesp) {
+      setIsTaskGeneLoading(false);
+      return;
+    }
+    setIsTaskGeneLoading(true);
+    try {
+      const response = await fetch(`${API_BASE}/api/task-gene`, {
+        method: 'POST',
+        headers: buildHeaders(),
+        body: JSON.stringify({
+          world_setting: worldSetting,
+          origin_story: originStory,
+          Power_level: powerLevel,
+          task_desp: taskDesp,
+          modelSettings
+        })
+      });
+      const data = await response.json();
+      if (data.ok && data.taskGene) {
+        setTaskGene(data.taskGene);
+        const options = [
+          data.taskGene.firs_opt,
+          data.taskGene.seco_opt,
+          data.taskGene.thir_opt
+        ].filter(Boolean);
+        setCurrentOptions(options);
+      }
+    } catch (error) {
+      console.error('Failed to generate task detail', error);
+    } finally {
+      setIsTaskGeneLoading(false);
+    }
+  };
 
   useEffect(() => {
     if (scrollRef.current) {
@@ -1129,11 +1172,9 @@ export default function App() {
     setCharacter(buildData.character);
     setWorld(buildData.world);
     setTaskLine(buildData.taskLine || []);
-    setQuestLog([
-      { type: 'narrator', text: buildData.multiAgent?.narrator?.origin_story },
-      { type: 'system', text: buildData.firstQuest?.text }
-    ]);
-    setCurrentOptions(buildData.firstQuest?.options || []);
+    setQuestLog([{ type: 'narrator', text: buildData.multiAgent?.narrator?.origin_story }]);
+    setCurrentOptions([]);
+    setTaskGene(null);
 
     localStorage.setItem(
       'genesisSession',
@@ -1145,11 +1186,9 @@ export default function App() {
         character: buildData.character,
         world: buildData.world,
         taskLine: buildData.taskLine || [],
-        questLog: [
-          { type: 'narrator', text: buildData.multiAgent?.narrator?.origin_story },
-          { type: 'system', text: buildData.firstQuest?.text }
-        ],
-        currentOptions: buildData.firstQuest?.options || []
+        questLog: [{ type: 'narrator', text: buildData.multiAgent?.narrator?.origin_story }],
+        currentOptions: [],
+        taskGene: null
       })
     );
 
@@ -1166,6 +1205,15 @@ export default function App() {
     progressTimersRef.current.forEach((timer) => clearTimeout(timer));
     setGenesisProgress('');
     setPhase('GAME');
+
+    const firstTaskSummary =
+      buildData.multiAgent?.questMaster?.tasks?.[0]?.summary || buildData.taskLine?.[0];
+    requestTaskGene({
+      worldSetting: buildData.worldBuilder?.world_setting,
+      originStory: buildData.multiAgent?.narrator?.origin_story,
+      powerLevel: buildData.worldBuilder?.Power_level,
+      taskDesp: firstTaskSummary
+    });
   };
 
   const handleAction = async (actionText) => {
@@ -1212,7 +1260,8 @@ export default function App() {
         playerInput,
         worldBuilder,
         multiAgent,
-        assets
+        assets,
+        taskGene
       })
     });
 
@@ -1464,25 +1513,31 @@ export default function App() {
           <section className="grid gap-4 md:grid-cols-2">
             <div className="bg-slate-900/60 border border-slate-800 rounded-2xl p-5 shadow-lg">
               <h3 className="text-xs uppercase tracking-widest text-cyan-400 mb-3">玩家身份</h3>
-              <p className="text-sm text-slate-300 leading-relaxed">{playerInput?.charDesc}</p>
+              <p className="text-sm text-white leading-relaxed">{playerInput?.charDesc}</p>
               <p className="text-xs text-slate-500 mt-2">{multiAgent?.narrator?.origin_story}</p>
             </div>
             <div className="bg-slate-900/60 border border-slate-800 rounded-2xl p-5 shadow-lg">
               <h3 className="text-xs uppercase tracking-widest text-cyan-400 mb-3">世界观概览</h3>
-              <p className="text-sm text-slate-300 leading-relaxed">{worldBuilder?.world_setting}</p>
+              <p className="text-sm text-white leading-relaxed">{worldBuilder?.world_setting}</p>
               <p className="text-xs text-slate-500 mt-2">{worldBuilder?.Power_level}</p>
             </div>
           </section>
 
           <section className="bg-slate-900/60 border border-slate-800 rounded-2xl p-5 shadow-lg">
-            <h3 className="text-xs uppercase tracking-widest text-cyan-400 mb-3">系统任务线</h3>
-            <div className="space-y-2 text-sm text-slate-300">
-              {taskLine.map((line) => (
-                <p key={line} className="leading-relaxed">
-                  {line}
-                </p>
-              ))}
-            </div>
+            <h3 className="text-xs uppercase tracking-widest text-cyan-400 mb-3">当前任务</h3>
+            {isTaskGeneLoading && !taskGene ? (
+              <div className="flex items-center gap-2 text-sm text-cyan-300 animate-pulse">
+                <Spinner />
+                任务推演中...
+              </div>
+            ) : taskGene ? (
+              <div className="space-y-3 text-sm text-slate-300">
+                <p className="leading-relaxed">{taskGene.world_desp_and_user_desp}</p>
+                <p className="leading-relaxed text-slate-200">{taskGene.task_desp}</p>
+              </div>
+            ) : (
+              <p className="text-xs text-slate-500">暂无任务信息。</p>
+            )}
             {saveId && <p className="mt-3 text-xs text-emerald-400">存档编号：{saveId}</p>}
           </section>
 
@@ -1516,16 +1571,18 @@ export default function App() {
 
         <div className="min-h-[200px] bg-slate-900 border-t border-slate-800 p-6 flex flex-col gap-4">
           <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-            {currentOptions.map((opt, i) => (
-              <button
-                key={opt}
-                onClick={() => handleAction(opt)}
-                disabled={isLoadingTurn}
-                className="p-3 text-sm text-left bg-slate-800 hover:bg-slate-700 hover:border-cyan-400 border border-slate-700 rounded-lg transition-all duration-200 text-slate-300 disabled:opacity-50"
-              >
-                {i + 1}. {opt}
-              </button>
-            ))}
+            {(isTaskGeneLoading && !taskGene ? ['任务推演中', '任务推演中', '任务推演中'] : currentOptions).map(
+              (opt, i) => (
+                <button
+                  key={`${opt}-${i}`}
+                  onClick={() => handleAction(opt)}
+                  disabled={isLoadingTurn || (isTaskGeneLoading && !taskGene)}
+                  className="p-3 text-sm text-left bg-slate-800 hover:bg-slate-700 hover:border-cyan-400 border border-slate-700 rounded-lg transition-all duration-200 text-slate-300 disabled:opacity-50"
+                >
+                  {i + 1}. {opt}
+                </button>
+              )
+            )}
           </div>
 
           <div className="flex gap-2 mt-2">
@@ -1563,6 +1620,7 @@ export default function App() {
           isOpen={isMapOpen}
           toggle={() => setIsMapOpen(false)}
           mapImage={assets?.map?.image}
+          worldSetting={worldBuilder?.world_setting}
         />
       )}
     </div>

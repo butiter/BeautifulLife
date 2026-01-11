@@ -784,6 +784,33 @@ const generateSkillMaster = async ({ apiKey, input, worldBuilder, provider, mode
   });
 };
 
+const generateTaskGene = async ({ apiKey, input, provider, model }) => {
+  const systemPrompt = `你是 TASK_GENE Agent。只输出 JSON，不要输出任何多余文字。
+你将基于世界观与起始任务，生成当前任务的详细说明。
+输入字段：
+- world_setting
+- origin_story
+- Power_level
+- task_desp
+
+输出 JSON 必须包含以下字段：
+- world_desp_and_user_desp：中等长度文本，包含 world_setting、origin_story、Power_level，在当前任务视角下的叙述
+- goal：完整、可执行的完成判定条件
+- task_desp：任务的玩家视角描述（不包含玩家未知信息）
+- task_detail：任务的系统视角描述（全视角）
+- firs_opt：玩家可能进行的第一个行动
+- seco_opt：玩家可能进行的第二个行动
+- thir_opt：玩家可能进行的第三个行动`;
+  return callJsonModel({
+    apiKey,
+    model,
+    provider,
+    systemPrompt,
+    userPayload: input,
+    logTag: 'task_gene'
+  });
+};
+
 const normalizeStats = (stats, fallback) => {
   const base = { ...fallback };
   if (!stats || typeof stats !== 'object') return base;
@@ -1228,6 +1255,39 @@ app.post('/api/genesis/build', async (req, res) => {
       ok: false,
       error: `创世纪生成失败：${message}`
     });
+  }
+});
+
+app.post('/api/task-gene', async (req, res) => {
+  addProcessLog('进入任务推演流程');
+  const payload = req.body || {};
+  const modelSettings = payload.modelSettings || {};
+  const resolvedSettings = getModelSettings({ modelSettings });
+  const highQuality = resolvedSettings.selections.textHigh;
+  const apiKey = getProviderApiKey(highQuality.provider, resolvedSettings);
+
+  if (!apiKey) {
+    return res.status(400).json({ ok: false, error: '缺少高质量文本生成 API Key。' });
+  }
+
+  try {
+    const taskGene = await generateTaskGene({
+      apiKey,
+      input: {
+        world_setting: payload.world_setting,
+        origin_story: payload.origin_story,
+        Power_level: payload.Power_level,
+        task_desp: payload.task_desp
+      },
+      provider: highQuality.provider,
+      model: highQuality.model
+    });
+    addProcessLog('任务推演完成', { provider: highQuality.provider, model: highQuality.model });
+    return res.json({ ok: true, taskGene });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    addProcessLog('任务推演失败', { error: message });
+    return res.status(502).json({ ok: false, error: `任务推演失败：${message}` });
   }
 });
 
