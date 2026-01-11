@@ -218,6 +218,16 @@ const callJsonModel = async ({ apiKey, model, systemPrompt, userPayload, logTag,
 
   if (provider === 'deepseek' || provider === 'qwen') {
     const baseUrl = provider === 'deepseek' ? PROVIDER_BASE_URLS.deepseek : PROVIDER_BASE_URLS.qwenText;
+    const messages =
+      provider === 'qwen'
+        ? [
+            { role: 'assistant', content: systemPrompt },
+            { role: 'user', content: JSON.stringify(userPayload) }
+          ]
+        : [
+            { role: 'system', content: systemPrompt },
+            { role: 'user', content: JSON.stringify(userPayload) }
+          ];
     const response = await fetch(`${baseUrl}/chat/completions`, {
       method: 'POST',
       headers: {
@@ -226,10 +236,7 @@ const callJsonModel = async ({ apiKey, model, systemPrompt, userPayload, logTag,
       },
       body: JSON.stringify({
         model,
-        messages: [
-          { role: 'system', content: systemPrompt },
-          { role: 'user', content: JSON.stringify(userPayload) }
-        ],
+        messages,
         stream: false
       })
     });
