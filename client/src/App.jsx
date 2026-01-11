@@ -17,6 +17,123 @@ import {
 
 const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:3001';
 
+const PROVIDERS = {
+  doubao: { label: '豆包', supports: ['text', 'image'] },
+  openai: { label: 'OPENAI', supports: ['text', 'image'] },
+  deepseek: { label: 'Deepseek', supports: ['text'] },
+  qwen: { label: 'QWEN', supports: ['text', 'image'] }
+};
+
+const MODEL_OPTIONS = {
+  textLow: {
+    doubao: [
+      { id: 'doubao-seed-1.8', label: 'doubao-seed-1.8' },
+      { id: 'doubao-seed-1.6-lite', label: 'doubao-seed-1.6-lite' },
+      { id: 'doubao-seed-1.6-flash', label: 'doubao-seed-1.6-flash' },
+      { id: 'doubao-1.5-pro-32k', label: 'doubao-1.5-pro-32k' },
+      { id: 'doubao-1.5-lite-32k', label: 'doubao-1.5-lite-32k' }
+    ],
+    qwen: [
+      { id: 'qwen-mt-lite', label: 'qwen-mt-lite' },
+      { id: 'qwen-flash', label: 'qwen-flash' },
+      { id: 'qwen-mt-plus', label: 'qwen-mt-plus' }
+    ],
+    deepseek: [{ id: 'deepseek-chat', label: 'deepseek-chat' }],
+    openai: [
+      { id: 'gpt-4.1-nano', label: 'gpt-4.1-nano(最快)' },
+      { id: 'gpt-5-nano', label: 'gpt-5-nano' },
+      { id: 'gpt-5.2-nano', label: 'gpt-5.2-nano' }
+    ]
+  },
+  textHigh: {
+    doubao: [
+      { id: 'doubao-seed-1.8', label: 'doubao-seed-1.8' },
+      { id: 'doubao-1.5-pro-32k', label: 'doubao-1.5-pro-32k' }
+    ],
+    qwen: [
+      { id: 'qwen3-max', label: 'qwen3-max' },
+      { id: 'qwen-plus', label: 'qwen-plus' }
+    ],
+    deepseek: [
+      { id: 'deepseek-chat', label: 'deepseek-chat' },
+      { id: 'deepseek-reasoner', label: 'deepseek-reasoner' }
+    ],
+    openai: [
+      { id: 'gpt-4.1-mini', label: 'gpt-4.1-mini' },
+      { id: 'gpt-5-mini', label: 'gpt-5-mini' },
+      { id: 'gpt-5.2-mini', label: 'gpt-5.2-mini' },
+      { id: 'gpt-5.2', label: 'gpt-5.2' }
+    ]
+  },
+  image: {
+    doubao: [
+      { id: 'doubao-seedream-4.5', label: 'doubao-seedream-4.5' },
+      { id: 'doubao-seedream-4.0', label: 'doubao-seedream-4.0' },
+      { id: 'doubao-seedream-3.0-t2i', label: 'doubao-seedream-3.0-t2i' },
+      { id: 'doubao-seededit-3.0-i2i', label: 'doubao-seededit-3.0-i2i' }
+    ],
+    qwen: [
+      { id: 'qwen-image-plus', label: 'qwen-image-plus' },
+      { id: 'qwen-image', label: 'qwen-image' }
+    ],
+    openai: [
+      { id: 'gpt-image-1-mini', label: 'gpt-image-1-mini(可能需要权限)' },
+      { id: 'gpt-image-1', label: 'gpt-image-1(可能需要权限)' },
+      { id: 'gpt-image-1.5', label: 'gpt-image-1.5(可能需要权限)' },
+      { id: 'gpt-5', label: 'gpt-5(可能需要权限，相应模式)' },
+      { id: 'gpt-5-mini', label: 'gpt-5-mini(可能需要权限，相应模式)' }
+    ]
+  }
+};
+
+const buildProviderLabel = (provider) => PROVIDERS[provider]?.label || provider;
+const buildModelLabel = (provider, model) => `[${buildProviderLabel(provider)}]${model}`;
+const TEST_TYPE_LABELS = {
+  textLow: '低质量文本',
+  textHigh: '高质量文本',
+  image: '图像'
+};
+
+const buildDefaultModelSettings = () => ({
+  providers: {
+    doubao: { apiKey: '' },
+    openai: { apiKey: '' },
+    deepseek: { apiKey: '' },
+    qwen: { apiKey: '' }
+  },
+  selections: {
+    textLow: { provider: 'openai', model: MODEL_OPTIONS.textLow.openai[0].id },
+    textHigh: { provider: 'openai', model: MODEL_OPTIONS.textHigh.openai[0].id },
+    image: { provider: 'openai', model: MODEL_OPTIONS.image.openai[0].id }
+  }
+});
+
+const normalizeModelSettings = (rawSettings) => {
+  const defaults = buildDefaultModelSettings();
+  if (!rawSettings || typeof rawSettings !== 'object') return defaults;
+
+  const selections = {};
+  ['textLow', 'textHigh', 'image'].forEach((key) => {
+    const rawSelection = rawSettings.selections?.[key] || {};
+    const provider =
+      MODEL_OPTIONS[key][rawSelection.provider] ? rawSelection.provider : defaults.selections[key].provider;
+    const models = MODEL_OPTIONS[key][provider] || [];
+    const modelIds = models.map((item) => item.id);
+    const model = modelIds.includes(rawSelection.model) ? rawSelection.model : models[0]?.id;
+    selections[key] = { provider, model };
+  });
+
+  return {
+    providers: {
+      doubao: { apiKey: rawSettings.providers?.doubao?.apiKey || '' },
+      openai: { apiKey: rawSettings.providers?.openai?.apiKey || '' },
+      deepseek: { apiKey: rawSettings.providers?.deepseek?.apiKey || '' },
+      qwen: { apiKey: rawSettings.providers?.qwen?.apiKey || '' }
+    },
+    selections
+  };
+};
+
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 const StatBar = ({ icon: Icon, label, value, color }) => (
@@ -181,8 +298,6 @@ const buildGenesisChecks = () => [
 
 const DebugView = () => {
   const [debugData, setDebugData] = useState(null);
-  const [apiKey, setApiKey] = useState(() => localStorage.getItem('openaiApiKey') || '');
-  const [keyStatus, setKeyStatus] = useState('idle');
 
   useEffect(() => {
     const stored = localStorage.getItem('genesisDebug');
@@ -190,18 +305,6 @@ const DebugView = () => {
       setDebugData(JSON.parse(stored));
     }
   }, []);
-
-  const handleSaveKey = () => {
-    const trimmed = apiKey.trim();
-    if (trimmed) {
-      localStorage.setItem('openaiApiKey', trimmed);
-      setKeyStatus('saved');
-    } else {
-      localStorage.removeItem('openaiApiKey');
-      setKeyStatus('cleared');
-    }
-    setTimeout(() => setKeyStatus('idle'), 2000);
-  };
 
   return (
     <div className="min-h-screen bg-slate-950 text-slate-200 p-8 space-y-10">
@@ -220,33 +323,6 @@ const DebugView = () => {
           </a>
         </div>
       </div>
-
-      <section className="space-y-3 bg-slate-900/70 border border-slate-800 rounded-xl p-4">
-        <h2 className="text-lg text-cyan-300">调试 Key</h2>
-        <p className="text-xs text-slate-400">
-          Debug 模式下可写入 API Key，仅保存在浏览器本地存储中。
-        </p>
-        <div className="flex flex-col md:flex-row gap-3">
-          <input
-            type="password"
-            className="flex-1 bg-slate-800 border border-slate-700 rounded p-2 text-sm focus:border-cyan-500 focus:outline-none"
-            placeholder="输入 API Key"
-            value={apiKey}
-            onChange={(e) => setApiKey(e.target.value)}
-          />
-          <button
-            onClick={handleSaveKey}
-            className="px-4 py-2 bg-cyan-900 hover:bg-cyan-800 text-cyan-100 text-sm font-semibold rounded-lg border border-cyan-700"
-          >
-            保存 Key
-          </button>
-        </div>
-        {keyStatus !== 'idle' && (
-          <p className="text-xs text-emerald-400">
-            {keyStatus === 'saved' ? 'Key 已保存。' : 'Key 已清除。'}
-          </p>
-        )}
-      </section>
 
       {!debugData ? (
         <div className="flex flex-col items-center justify-center p-8 border border-slate-800 rounded-xl bg-slate-900/40">
@@ -389,6 +465,280 @@ const LogView = () => {
   );
 };
 
+const SettingsView = ({ modelSettings, onSave }) => {
+  const [draft, setDraft] = useState(() => normalizeModelSettings(modelSettings));
+  const [isApiModalOpen, setIsApiModalOpen] = useState(false);
+  const [testStatus, setTestStatus] = useState('idle');
+  const [testResults, setTestResults] = useState([]);
+  const [testError, setTestError] = useState('');
+
+  useEffect(() => {
+    setDraft(normalizeModelSettings(modelSettings));
+  }, [modelSettings]);
+
+  const updateSelection = (key, updates) => {
+    setDraft((prev) => {
+      const current = prev.selections[key];
+      const next = { ...current, ...updates };
+      if (updates.provider && updates.provider !== current.provider) {
+        const providerModels = MODEL_OPTIONS[key][updates.provider] || [];
+        next.model = providerModels[0]?.id || '';
+      }
+      return {
+        ...prev,
+        selections: {
+          ...prev.selections,
+          [key]: next
+        }
+      };
+    });
+  };
+
+  const handleSave = () => {
+    const normalized = normalizeModelSettings(draft);
+    setDraft(normalized);
+    onSave(normalized);
+  };
+
+  const handleTest = async () => {
+    setTestStatus('running');
+    setTestResults([]);
+    setTestError('');
+    try {
+      const response = await fetch(`${API_BASE}/api/settings/test`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ providers: draft.providers })
+      });
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data?.error || '测试失败');
+      }
+      setTestResults(Array.isArray(data.results) ? data.results : []);
+      setTestStatus('done');
+    } catch (error) {
+      const message = error instanceof Error ? error.message : '测试失败';
+      setTestError(message);
+      setTestStatus('error');
+    }
+  };
+
+  const handleSaveAndTest = async () => {
+    handleSave();
+    await handleTest();
+  };
+
+  const renderModelRow = (key, title, description) => {
+    const selection = draft.selections[key];
+    const providerOptions = Object.keys(MODEL_OPTIONS[key]);
+    const models = MODEL_OPTIONS[key][selection.provider] || [];
+    return (
+      <div className="space-y-2">
+        <div>
+          <h3 className="text-sm font-semibold text-slate-200">{title}</h3>
+          {description && <p className="text-xs text-slate-500 mt-1">{description}</p>}
+        </div>
+        <div className="grid md:grid-cols-2 gap-3">
+          <select
+            className="w-full bg-slate-800 border border-slate-700 rounded p-2 text-sm focus:border-cyan-500 focus:outline-none"
+            value={selection.provider}
+            onChange={(e) => updateSelection(key, { provider: e.target.value })}
+          >
+            {providerOptions.map((provider) => (
+              <option key={provider} value={provider}>
+                {buildProviderLabel(provider)}
+              </option>
+            ))}
+          </select>
+          <select
+            className="w-full bg-slate-800 border border-slate-700 rounded p-2 text-sm focus:border-cyan-500 focus:outline-none"
+            value={selection.model}
+            onChange={(e) => updateSelection(key, { model: e.target.value })}
+          >
+            {models.map((model) => (
+              <option key={model.id} value={model.id}>
+                {buildModelLabel(selection.provider, model.label)}
+              </option>
+            ))}
+          </select>
+        </div>
+      </div>
+    );
+  };
+
+  return (
+    <div className="min-h-screen bg-slate-950 text-slate-200 p-8 space-y-8">
+      <div className="flex items-center justify-between">
+        <div>
+          <h1 className="text-3xl font-semibold text-white">Settings</h1>
+          <p className="text-xs text-slate-400 mt-1">配置 API 与模型分配规则。</p>
+        </div>
+        <a href="/" className="text-cyan-400 text-sm">
+          返回游戏
+        </a>
+      </div>
+
+      <section className="space-y-4 bg-slate-900/70 border border-slate-800 rounded-xl p-5">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <h2 className="text-lg text-cyan-300">API 提供方</h2>
+            <p className="text-xs text-slate-500">点击填写 API Key，保存后会测试已填写的所有模型。</p>
+          </div>
+          <button
+            type="button"
+            onClick={() => setIsApiModalOpen(true)}
+            className="px-4 py-2 text-xs uppercase tracking-widest bg-slate-800 border border-slate-700 rounded-lg text-slate-200 hover:text-white hover:border-cyan-400 transition"
+          >
+            填写 API
+          </button>
+        </div>
+        <div className="grid gap-3 md:grid-cols-2">
+          {Object.keys(PROVIDERS).map((provider) => (
+            <div
+              key={provider}
+              className="flex items-center justify-between bg-slate-950/60 border border-slate-800 rounded-lg px-3 py-2 text-xs"
+            >
+              <span className="text-slate-300">{buildProviderLabel(provider)}</span>
+              <span className="text-slate-500">
+                {draft.providers[provider]?.apiKey ? '已填写' : '未填写'}
+              </span>
+            </div>
+          ))}
+        </div>
+        <div className="flex flex-wrap gap-3">
+          <button
+            onClick={handleSave}
+            className="px-4 py-2 text-xs uppercase tracking-widest bg-cyan-900 hover:bg-cyan-800 text-cyan-100 rounded-lg border border-cyan-700"
+          >
+            保存
+          </button>
+          <button
+            onClick={handleSaveAndTest}
+            className="px-4 py-2 text-xs uppercase tracking-widest bg-slate-800 border border-slate-700 rounded-lg text-slate-200 hover:text-white hover:border-cyan-400 transition"
+          >
+            保存并测试
+          </button>
+        </div>
+
+        {testStatus === 'running' && (
+          <div className="flex items-center gap-2 text-sm text-cyan-300">
+            <Spinner />
+            正在测试 API 模型可用性...
+          </div>
+        )}
+
+        {testError && (
+          <div className="bg-rose-500/10 border border-rose-500/40 text-rose-200 rounded-xl p-4 text-sm">
+            {testError}
+          </div>
+        )}
+
+        {testStatus === 'done' && (
+          <div className="space-y-2">
+            <h3 className="text-sm text-slate-200 font-semibold">测试结果</h3>
+            <div className="grid gap-2">
+              {testResults.map((result) => {
+                const modelOption = MODEL_OPTIONS[result.type]?.[result.provider]?.find(
+                  (item) => item.id === result.model
+                );
+                const modelLabel = modelOption?.label || result.model;
+                return (
+                <div
+                  key={`${result.provider}-${result.model}-${result.type}`}
+                  className="flex items-center justify-between bg-slate-950/60 border border-slate-800 rounded-lg px-3 py-2 text-xs"
+                >
+                  <div className="space-y-1">
+                    <div className="text-slate-200">
+                      {buildModelLabel(result.provider, modelLabel)}
+                    </div>
+                    <div className="text-slate-500">
+                      {TEST_TYPE_LABELS[result.type] || result.type}
+                    </div>
+                  </div>
+                  <span
+                    className={
+                      result.ok
+                        ? 'text-emerald-400 font-semibold'
+                        : 'text-rose-400 font-semibold'
+                    }
+                  >
+                    {result.ok ? '通过' : '失败'}
+                  </span>
+                </div>
+              );
+              })}
+            </div>
+          </div>
+        )}
+      </section>
+
+      <section className="space-y-6 bg-slate-900/70 border border-slate-800 rounded-xl p-5">
+        <h2 className="text-lg text-cyan-300">模型分配</h2>
+        {renderModelRow('textLow', '低质量文本生成', '用于安全检查与快速推理。')}
+        {renderModelRow('textHigh', '高质量文本生成', '用于世界构建、人物与任务生成。')}
+        {renderModelRow('image', '图像生成', '用于角色头像与地图资产。')}
+      </section>
+
+      {isApiModalOpen && (
+        <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-6">
+          <div className="bg-slate-900 border border-slate-700 rounded-2xl p-6 w-full max-w-lg space-y-4 shadow-2xl">
+            <div className="flex items-center justify-between">
+              <h3 className="text-lg text-white font-semibold">填写 API Key</h3>
+              <button
+                onClick={() => setIsApiModalOpen(false)}
+                className="text-slate-400 hover:text-white"
+              >
+                ✕
+              </button>
+            </div>
+            <div className="space-y-3">
+              {Object.keys(PROVIDERS).map((provider) => (
+                <div key={provider} className="space-y-1">
+                  <label className="text-xs uppercase tracking-widest text-slate-500">
+                    {buildProviderLabel(provider)}
+                  </label>
+                  <input
+                    type="password"
+                    className="w-full bg-slate-800 border border-slate-700 rounded p-2 text-sm focus:border-cyan-500 focus:outline-none"
+                    placeholder={`输入 ${buildProviderLabel(provider)} API Key`}
+                    value={draft.providers[provider]?.apiKey || ''}
+                    onChange={(e) =>
+                      setDraft((prev) => ({
+                        ...prev,
+                        providers: {
+                          ...prev.providers,
+                          [provider]: { apiKey: e.target.value }
+                        }
+                      }))
+                    }
+                  />
+                </div>
+              ))}
+            </div>
+            <div className="flex justify-end gap-3 pt-2">
+              <button
+                onClick={() => setIsApiModalOpen(false)}
+                className="px-4 py-2 text-xs uppercase tracking-widest bg-slate-800 border border-slate-700 rounded-lg text-slate-200 hover:text-white hover:border-cyan-400 transition"
+              >
+                关闭
+              </button>
+              <button
+                onClick={() => {
+                  setIsApiModalOpen(false);
+                  handleSaveAndTest();
+                }}
+                className="px-4 py-2 text-xs uppercase tracking-widest bg-cyan-900 hover:bg-cyan-800 text-cyan-100 rounded-lg border border-cyan-700"
+              >
+                保存并测试
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
+
 export default function App() {
   const [phase, setPhase] = useState('SETUP');
   const [worldSettings, setWorldSettings] = useState(defaultSettings);
@@ -408,6 +758,15 @@ export default function App() {
   const [worldBuilder, setWorldBuilder] = useState(null);
   const [multiAgent, setMultiAgent] = useState(null);
   const [assets, setAssets] = useState(null);
+  const [modelSettings, setModelSettings] = useState(() => {
+    const stored = localStorage.getItem('genesisModelSettings');
+    if (!stored) return buildDefaultModelSettings();
+    try {
+      return normalizeModelSettings(JSON.parse(stored));
+    } catch (error) {
+      return buildDefaultModelSettings();
+    }
+  });
 
   const scrollRef = useRef(null);
 
@@ -462,14 +821,11 @@ export default function App() {
     currentOptions
   ]);
 
-  const buildHeaders = () => {
-    const headers = { 'Content-Type': 'application/json' };
-    const storedKey = localStorage.getItem('openaiApiKey');
-    if (storedKey) {
-      headers['X-API-Key'] = storedKey;
-    }
-    return headers;
-  };
+  useEffect(() => {
+    localStorage.setItem('genesisModelSettings', JSON.stringify(modelSettings));
+  }, [modelSettings]);
+
+  const buildHeaders = () => ({ 'Content-Type': 'application/json' });
 
   useEffect(() => {
     if (scrollRef.current) {
@@ -490,7 +846,7 @@ export default function App() {
     const response = await fetch(`${API_BASE}/api/genesis/checks`, {
       method: 'POST',
       headers: buildHeaders(),
-      body: JSON.stringify(worldSettings)
+      body: JSON.stringify({ settings: worldSettings, modelSettings })
     });
     const data = await response.json();
 
@@ -537,6 +893,7 @@ export default function App() {
       headers: buildHeaders(),
       body: JSON.stringify({
         settings: worldSettings,
+        modelSettings,
         sanitizedInput: data.sanitizedInput || {},
         worldDesc: worldSettings.worldDesc,
         charDesc: worldSettings.charDesc
@@ -654,6 +1011,11 @@ export default function App() {
   const renderSetup = () => (
     <div className="min-h-screen bg-slate-950 text-slate-200 flex items-center justify-center p-6">
       <div className="max-w-2xl w-full bg-slate-900/80 border border-slate-800 rounded-2xl p-8 shadow-2xl">
+        <div className="flex justify-end">
+          <a href="/settings" className="text-xs text-cyan-400 hover:text-cyan-300">
+            打开设置
+          </a>
+        </div>
         <h1 className="text-4xl md:text-5xl font-extralight tracking-[0.3em] text-center mb-10 text-white">
           BEAUTIFUL <span className="font-semibold text-cyan-400">LIFE</span>
         </h1>
@@ -844,6 +1206,12 @@ export default function App() {
           </div>
           <div className="flex items-center gap-3">
             <a
+              href="/settings"
+              className="px-3 py-2 text-xs uppercase tracking-widest bg-slate-800 border border-slate-700 rounded-lg text-slate-200 hover:text-white hover:border-cyan-400 transition"
+            >
+              Settings
+            </a>
+            <a
               href="/debug"
               className="px-3 py-2 text-xs uppercase tracking-widest bg-slate-800 border border-slate-700 rounded-lg text-slate-200 hover:text-white hover:border-cyan-400 transition"
             >
@@ -984,6 +1352,9 @@ export default function App() {
   }
   if (window.location.pathname === '/log') {
     return <LogView />;
+  }
+  if (window.location.pathname === '/settings') {
+    return <SettingsView modelSettings={modelSettings} onSave={setModelSettings} />;
   }
 
   return (
