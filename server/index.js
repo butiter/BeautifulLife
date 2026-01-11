@@ -152,8 +152,7 @@ const callImageModel = async ({ apiKey, prompt, size }) => {
     body: JSON.stringify({
       model: IMAGE_MODEL,
       prompt,
-      size,
-      response_format: 'b64_json'
+      size
     })
   });
 
@@ -163,9 +162,15 @@ const callImageModel = async ({ apiKey, prompt, size }) => {
   }
 
   const data = await response.json();
-  const b64 = data?.data?.[0]?.b64_json;
-  if (!b64) throw new Error('OpenAI image response missing image data.');
-  return `data:image/png;base64,${b64}`;
+  const imageData = data?.data?.[0];
+  const b64 = imageData?.b64_json;
+  if (b64) {
+    return `data:image/png;base64,${b64}`;
+  }
+  if (imageData?.url) {
+    return imageData.url;
+  }
+  throw new Error('OpenAI image response missing image data.');
 };
 
 const buildPlaceholderImage = ({ label, width, height }) => {
