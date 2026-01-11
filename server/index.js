@@ -53,13 +53,86 @@ const sanitizePrompt = (text, options = {}) => {
   return cleaned;
 };
 
-const OPENAI_API_URL = 'https://api.openai.com/v1/responses';
-const OPENAI_IMAGE_URL = 'https://api.openai.com/v1/images/generations';
-const CHECK_MODEL = 'gpt-5-mini';
-const GENERATION_MODEL = 'gpt-5.2';
-const IMAGE_MODEL = 'gpt-image-1';
+const PROVIDER_ENV_KEYS = {
+  openai: 'OPENAI_API_KEY',
+  doubao: 'ARK_API_KEY',
+  deepseek: 'DEEPSEEK_API_KEY',
+  qwen: 'DASHSCOPE_API_KEY'
+};
 
-const getApiKey = (req) => req.headers['x-api-key'] || process.env.OPENAI_API_KEY;
+const PROVIDER_BASE_URLS = {
+  openai: 'https://api.openai.com/v1',
+  doubao: 'https://ark.cn-beijing.volces.com/api/v3',
+  deepseek: 'https://api.deepseek.com/v1',
+  qwenText: 'https://dashscope-intl.aliyuncs.com/compatible-mode/v1',
+  qwenImage: 'https://dashscope-intl.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation'
+};
+
+const MODEL_CATALOG = {
+  textLow: {
+    doubao: [
+      'doubao-seed-1.8',
+      'doubao-seed-1.6-lite',
+      'doubao-seed-1.6-flash',
+      'doubao-1.5-pro-32k',
+      'doubao-1.5-lite-32k'
+    ],
+    qwen: ['qwen-mt-lite', 'qwen-flash', 'qwen-mt-plus'],
+    deepseek: ['deepseek-chat'],
+    openai: ['gpt-4.1-nano', 'gpt-5-nano', 'gpt-5.2-nano']
+  },
+  textHigh: {
+    doubao: ['doubao-seed-1.8', 'doubao-1.5-pro-32k'],
+    qwen: ['qwen3-max', 'qwen-plus'],
+    deepseek: ['deepseek-chat', 'deepseek-reasoner'],
+    openai: ['gpt-4.1-mini', 'gpt-5-mini', 'gpt-5.2-mini', 'gpt-5.2']
+  },
+  image: {
+    doubao: [
+      'doubao-seedream-4.5',
+      'doubao-seedream-4.0',
+      'doubao-seedream-3.0-t2i',
+      'doubao-seededit-3.0-i2i'
+    ],
+    qwen: ['qwen-image-plus', 'qwen-image'],
+    openai: ['gpt-image-1-mini', 'gpt-image-1', 'gpt-image-1.5', 'gpt-5', 'gpt-5-mini']
+  }
+};
+
+const DEFAULT_MODEL_SELECTIONS = {
+  textLow: { provider: 'openai', model: 'gpt-4.1-nano' },
+  textHigh: { provider: 'openai', model: 'gpt-5.2' },
+  image: { provider: 'openai', model: 'gpt-image-1' }
+};
+
+const getModelSettings = (payload) => {
+  const raw = payload?.modelSettings || payload?.settings?.modelSettings || {};
+  const selections = raw.selections || {};
+  const normalizedSelections = {};
+
+  Object.keys(DEFAULT_MODEL_SELECTIONS).forEach((key) => {
+    const defaultSelection = DEFAULT_MODEL_SELECTIONS[key];
+    const providerOptions = MODEL_CATALOG[key];
+    const requestedProvider = selections[key]?.provider || defaultSelection.provider;
+    const provider = providerOptions[requestedProvider] ? requestedProvider : defaultSelection.provider;
+    const models = providerOptions[provider] || [];
+    const requestedModel = selections[key]?.model || defaultSelection.model;
+    const model = models.includes(requestedModel) ? requestedModel : models[0];
+    normalizedSelections[key] = { provider, model };
+  });
+
+  return {
+    providers: raw.providers || {},
+    selections: normalizedSelections
+  };
+};
+
+const getProviderApiKey = (provider, modelSettings) => {
+  const fromSettings = modelSettings?.providers?.[provider]?.apiKey;
+  if (fromSettings) return fromSettings;
+  const envKey = PROVIDER_ENV_KEYS[provider];
+  return envKey ? process.env[envKey] : undefined;
+};
 
 const extractResponseText = (data) => {
   if (typeof data?.output_text === 'string') return data.output_text;
@@ -69,6 +142,8 @@ const extractResponseText = (data) => {
   return textItem?.text || '';
 };
 
+const extractChatCompletionText = (data) => data?.choices?.[0]?.message?.content || '';
+
 const addLlmLog = (entry) => {
   llmLogs.push(entry);
   if (llmLogs.length > MAX_LLM_LOGS) {
@@ -76,13 +151,13 @@ const addLlmLog = (entry) => {
   }
 };
 
-const addImageErrorLog = ({ prompt, size, error }) => {
+const addImageErrorLog = ({ prompt, size, error, model, provider }) => {
   const message = error instanceof Error ? error.message : String(error);
   addLlmLog({
     id: nanoid(8),
     createdAt: new Date().toISOString(),
-    model: IMAGE_MODEL,
-    input: { tag: 'image_generation', prompt, size },
+    model,
+    input: { tag: 'image_generation', prompt, size, provider },
     output: `ERROR: ${message}`,
     error: true
   });
@@ -97,60 +172,131 @@ const parseJsonOutput = (outputText) => {
   return JSON.parse(trimmed);
 };
 
-const callJsonModel = async ({ apiKey, model, systemPrompt, userPayload, logTag }) => {
+const callJsonModel = async ({ apiKey, model, systemPrompt, userPayload, logTag, provider }) => {
   const startedAt = new Date().toISOString();
-  const payload = {
-    model,
-    text: { format: { type: 'json_object' } },
-    input: [
-      {
-        role: 'system',
-        content: [{ type: 'input_text', text: systemPrompt }]
+  if (!apiKey) throw new Error('Missing API key');
+
+  if (provider === 'openai' || provider === 'doubao') {
+    const payload = {
+      model,
+      text: { format: { type: 'json_object' } },
+      input: [
+        {
+          role: 'system',
+          content: [{ type: 'input_text', text: systemPrompt }]
+        },
+        {
+          role: 'user',
+          content: [{ type: 'input_text', text: JSON.stringify(userPayload) }]
+        }
+      ]
+    };
+
+    const baseUrl = provider === 'openai' ? PROVIDER_BASE_URLS.openai : PROVIDER_BASE_URLS.doubao;
+    const response = await fetch(`${baseUrl}/responses`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${apiKey}`
       },
-      {
-        role: 'user',
-        content: [{ type: 'input_text', text: JSON.stringify(userPayload) }]
-      }
-    ]
-  };
+      body: JSON.stringify(payload)
+    });
 
-  const response = await fetch(OPENAI_API_URL, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${apiKey}`
-    },
-    body: JSON.stringify(payload)
-  });
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(`${provider} request failed: ${response.status} ${errorText}`);
+    }
 
-  if (!response.ok) {
-    const errorText = await response.text();
-    throw new Error(`OpenAI request failed: ${response.status} ${errorText}`);
+    const data = await response.json();
+    const outputText = extractResponseText(data);
+
+    addLlmLog({
+      id: nanoid(8),
+      createdAt: startedAt,
+      model,
+      input: { tag: logTag, payload: userPayload, provider },
+      output: outputText
+    });
+
+    return parseJsonOutput(outputText);
   }
 
-  const data = await response.json();
-  const outputText = extractResponseText(data);
+  if (provider === 'deepseek' || provider === 'qwen') {
+    const baseUrl = provider === 'deepseek' ? PROVIDER_BASE_URLS.deepseek : PROVIDER_BASE_URLS.qwenText;
+    const response = await fetch(`${baseUrl}/chat/completions`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${apiKey}`
+      },
+      body: JSON.stringify({
+        model,
+        messages: [
+          { role: 'system', content: systemPrompt },
+          { role: 'user', content: JSON.stringify(userPayload) }
+        ],
+        stream: false
+      })
+    });
 
-  addLlmLog({
-    id: nanoid(8),
-    createdAt: startedAt,
-    model,
-    input: { tag: logTag, payload: userPayload },
-    output: outputText
-  });
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(`${provider} request failed: ${response.status} ${errorText}`);
+    }
 
-  return parseJsonOutput(outputText);
+    const data = await response.json();
+    const outputText = extractChatCompletionText(data);
+
+    addLlmLog({
+      id: nanoid(8),
+      createdAt: startedAt,
+      model,
+      input: { tag: logTag, payload: userPayload, provider },
+      output: outputText
+    });
+
+    return parseJsonOutput(outputText);
+  }
+
+  throw new Error(`Unsupported provider: ${provider}`);
 };
 
-const callImageModel = async ({ apiKey, prompt, size }) => {
-  const response = await fetch(OPENAI_IMAGE_URL, {
+const callOpenAiImage = async ({ apiKey, prompt, size, model }) => {
+  if (model.startsWith('gpt-5')) {
+    const response = await fetch(`${PROVIDER_BASE_URLS.openai}/responses`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${apiKey}`
+      },
+      body: JSON.stringify({
+        model,
+        input: prompt,
+        tools: [{ type: 'image_generation' }]
+      })
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(`OpenAI image request failed: ${response.status} ${errorText}`);
+    }
+
+    const data = await response.json();
+    const imageCall = data?.output?.find((item) => item.type === 'image_generation_call');
+    if (imageCall?.result) {
+      return `data:image/png;base64,${imageCall.result}`;
+    }
+    throw new Error('OpenAI response image data missing.');
+  }
+
+  const response = await fetch(`${PROVIDER_BASE_URLS.openai}/images/generations`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
       Authorization: `Bearer ${apiKey}`
     },
     body: JSON.stringify({
-      model: IMAGE_MODEL,
+      model,
       prompt,
       size
     })
@@ -171,6 +317,94 @@ const callImageModel = async ({ apiKey, prompt, size }) => {
     return imageData.url;
   }
   throw new Error('OpenAI image response missing image data.');
+};
+
+const callDoubaoImage = async ({ apiKey, prompt, size, model }) => {
+  const response = await fetch(`${PROVIDER_BASE_URLS.doubao}/images/generations`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${apiKey}`
+    },
+    body: JSON.stringify({
+      model,
+      prompt,
+      size,
+      response_format: 'url',
+      watermark: false
+    })
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`Doubao image request failed: ${response.status} ${errorText}`);
+  }
+
+  const data = await response.json();
+  const imageData = data?.data?.[0];
+  if (imageData?.url) {
+    return imageData.url;
+  }
+  if (imageData?.b64_json) {
+    return `data:image/png;base64,${imageData.b64_json}`;
+  }
+  throw new Error('Doubao image response missing image data.');
+};
+
+const callQwenImage = async ({ apiKey, prompt, size, model }) => {
+  const response = await fetch(PROVIDER_BASE_URLS.qwenImage, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${apiKey}`
+    },
+    body: JSON.stringify({
+      model,
+      input: {
+        messages: [
+          {
+            role: 'user',
+            content: [{ text: prompt }]
+          }
+        ]
+      },
+      parameters: {
+        size,
+        watermark: false,
+        prompt_extend: true
+      }
+    })
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`QWEN image request failed: ${response.status} ${errorText}`);
+  }
+
+  const data = await response.json();
+  const content = data?.output?.choices?.[0]?.message?.content;
+  if (Array.isArray(content)) {
+    const imageItem = content.find((item) => item.image || item.image_url);
+    if (imageItem?.image) return imageItem.image;
+    if (imageItem?.image_url) return imageItem.image_url;
+  }
+  const imageUrl = data?.output?.image || data?.output?.image_url;
+  if (imageUrl) return imageUrl;
+  throw new Error('QWEN image response missing image data.');
+};
+
+const callImageModel = async ({ apiKey, prompt, size, model, provider }) => {
+  if (!apiKey) throw new Error('Missing API key');
+  if (provider === 'openai') {
+    return callOpenAiImage({ apiKey, prompt, size, model });
+  }
+  if (provider === 'doubao') {
+    return callDoubaoImage({ apiKey, prompt, size, model });
+  }
+  if (provider === 'qwen') {
+    return callQwenImage({ apiKey, prompt, size, model });
+  }
+  throw new Error(`Unsupported image provider: ${provider}`);
 };
 
 const buildPlaceholderImage = ({ label, width, height }) => {
@@ -196,19 +430,15 @@ const buildPlaceholderImage = ({ label, width, height }) => {
   return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg.trim())}`;
 };
 
-const runPromptChecks = async (worldDescRaw, charDescRaw, apiKey) => {
+const runPromptChecks = async ({ worldDescRaw, charDescRaw, apiKey, provider, model }) => {
   const startedAt = new Date().toISOString();
   const inputPayload = { worldDesc: worldDescRaw, charDesc: charDescRaw };
-  const payload = {
-    model: CHECK_MODEL,
-    text: { format: { type: 'json_object' } },
-    input: [
-      {
-        role: 'system',
-        content: [
-          {
-            type: 'input_text',
-            text: `你是内容审核与创世纪输入审查员。请仅输出 JSON 对象，不要输出任何多余文字。
+  try {
+    const parsed = await callJsonModel({
+      apiKey,
+      model,
+      provider,
+      systemPrompt: `你是内容审核与创世纪输入审查员。请仅输出 JSON 对象，不要输出任何多余文字。
 
 需要完成四项检查并给出简短中文说明：
 1) safety：若包含攻击/入侵/绕过/漏洞/脚本注入等黑客内容，或政治/色情/赌博/恐怖/毒品/枪支/邪教/极端等敏感主题，则 fail；否则 pass。
@@ -227,55 +457,14 @@ const runPromptChecks = async (worldDescRaw, charDescRaw, apiKey) => {
     "builder": { "status": "pass|fail", "message": "..." }
   },
   "sanitizedInput": { "worldDesc": "...", "charDesc": "..." }
-}`
-          }
-        ]
+}`,
+      userPayload: {
+        worldDesc: worldDescRaw,
+        charDesc: charDescRaw
       },
-      {
-        role: 'user',
-        content: [
-          {
-            type: 'input_text',
-            text: JSON.stringify({
-              worldDesc: worldDescRaw,
-              charDesc: charDescRaw
-            })
-          }
-        ]
-      }
-    ]
-  };
-
-  const response = await fetch(OPENAI_API_URL, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${apiKey}`
-    },
-    body: JSON.stringify(payload)
-  });
-
-  try {
-    if (!response.ok) {
-      const errorText = await response.text();
-      throw new Error(`OpenAI request failed: ${response.status} ${errorText}`);
-    }
-
-    const data = await response.json();
-    const outputText = extractResponseText(data);
-    if (!outputText) {
-      throw new Error('OpenAI response missing output text.');
-    }
-
-    addLlmLog({
-      id: nanoid(8),
-      createdAt: startedAt,
-      model: CHECK_MODEL,
-      input: inputPayload,
-      output: outputText
+      logTag: 'prompt_check'
     });
 
-    const parsed = JSON.parse(outputText);
     const rawChecks = parsed?.checks || {};
     const checks = {
       safety: {
@@ -310,16 +499,21 @@ const runPromptChecks = async (worldDescRaw, charDescRaw, apiKey) => {
     addLlmLog({
       id: nanoid(8),
       createdAt: startedAt,
-      model: CHECK_MODEL,
-      input: inputPayload,
+      model,
+      input: { ...inputPayload, provider },
       output: `ERROR: ${message}`,
-      error: true
+      error: true,
+      provider
     });
     throw error;
   }
 };
 
-const runGenesisChecks = async ({ worldDescRaw, charDescRaw, apiKey }) => {
+const runGenesisChecks = async ({ worldDescRaw, charDescRaw, modelSettings }) => {
+  const resolvedSettings = getModelSettings({ modelSettings });
+  const lowQuality = resolvedSettings.selections.textLow;
+  const apiKey = getProviderApiKey(lowQuality.provider, resolvedSettings);
+
   if (!apiKey) {
     return {
       ok: false,
@@ -338,7 +532,13 @@ const runGenesisChecks = async ({ worldDescRaw, charDescRaw, apiKey }) => {
 
   let checkPayload;
   try {
-    checkPayload = await runPromptChecks(worldDescRaw, charDescRaw, apiKey);
+    checkPayload = await runPromptChecks({
+      worldDescRaw,
+      charDescRaw,
+      apiKey,
+      provider: lowQuality.provider,
+      model: lowQuality.model
+    });
   } catch (error) {
     return {
       ok: false,
@@ -462,7 +662,7 @@ const buildWorldBuilder = (settings, input) => {
   };
 };
 
-const generateWorldBuilder = async ({ apiKey, input, settings }) => {
+const generateWorldBuilder = async ({ apiKey, input, settings, provider, model }) => {
   const systemPrompt = `你是世界构建器（World Builder Agent）。只输出 JSON，不要输出任何多余文字或代码块。
 
 根据输入内容生成世界构建结果，JSON 必须包含：
@@ -486,7 +686,8 @@ const generateWorldBuilder = async ({ apiKey, input, settings }) => {
 
   const raw = await callJsonModel({
     apiKey,
-    model: GENERATION_MODEL,
+    model,
+    provider,
     systemPrompt,
     userPayload,
     logTag: 'world_builder'
@@ -502,21 +703,22 @@ const generateWorldBuilder = async ({ apiKey, input, settings }) => {
   };
 };
 
-const generateNarrator = async ({ apiKey, input, worldBuilder }) => {
+const generateNarrator = async ({ apiKey, input, worldBuilder, provider, model }) => {
   const systemPrompt = `你是身份与剧情编排器中的 Narrator。只输出 JSON，不要输出任何多余文字。
 输出格式：
 {"origin_story":"..."}
 请基于世界观、势力信息与人物描述，写出合理出身故事，中文 120-220 字。`;
   return callJsonModel({
     apiKey,
-    model: GENERATION_MODEL,
+    model,
+    provider,
     systemPrompt,
     userPayload: { input, worldBuilder },
     logTag: 'narrator'
   });
 };
 
-const generateQuestMaster = async ({ apiKey, input, worldBuilder }) => {
+const generateQuestMaster = async ({ apiKey, input, worldBuilder, provider, model }) => {
   const systemPrompt = `你是身份与剧情编排器中的 Quest Master。只输出 JSON。
 生成一条线性主线任务（5-8 个节点），并给出最终势力目标。
 输出结构：
@@ -530,14 +732,15 @@ const generateQuestMaster = async ({ apiKey, input, worldBuilder }) => {
 任务描述为一小段中文。`;
   return callJsonModel({
     apiKey,
-    model: GENERATION_MODEL,
+    model,
+    provider,
     systemPrompt,
     userPayload: { input, worldBuilder },
     logTag: 'quest_master'
   });
 };
 
-const generateSkillMaster = async ({ apiKey, input, worldBuilder }) => {
+const generateSkillMaster = async ({ apiKey, input, worldBuilder, provider, model }) => {
   const systemPrompt = `你是身份与剧情编排器中的 Skill Master。只输出 JSON。
 输出结构：
 {
@@ -547,7 +750,8 @@ const generateSkillMaster = async ({ apiKey, input, worldBuilder }) => {
 技能与道具必须与世界观一致。`;
   return callJsonModel({
     apiKey,
-    model: GENERATION_MODEL,
+    model,
+    provider,
     systemPrompt,
     userPayload: { input, worldBuilder },
     logTag: 'skill_master'
@@ -611,25 +815,37 @@ const normalizeQuestMaster = (questMaster, fallbackTasks) => {
   };
 };
 
-const buildAssets = async (worldBuilder, apiKey) => {
+const buildAssets = async ({ worldBuilder, apiKey, provider, model }) => {
   const avatarPrompt = `角色头像：${worldBuilder.character_appearance || '神秘旅者，目光坚定'}。风格关键词：${worldBuilder.pic_style.join('，')}。半身近景，单一角色，清晰面部细节。`;
   const mapPlaces = worldBuilder.map
     .slice(0, 10)
     .map((node) => node.name)
     .join('、');
   const mapPrompt = `世界地图：包含${mapPlaces}等地点，适度标注文字说明。风格关键词：${worldBuilder.pic_style.join('，')}。简洁清晰、易读。`;
-  const imageSize = '1024x1024';
+  const imageSize = provider === 'qwen' ? '768*768' : '1024x1024';
 
   const [avatarResult, mapResult] = await Promise.allSettled([
-    callImageModel({ apiKey, prompt: avatarPrompt, size: imageSize }),
-    callImageModel({ apiKey, prompt: mapPrompt, size: imageSize })
+    callImageModel({ apiKey, prompt: avatarPrompt, size: imageSize, model, provider }),
+    callImageModel({ apiKey, prompt: mapPrompt, size: imageSize, model, provider })
   ]);
 
   if (avatarResult.status === 'rejected') {
-    addImageErrorLog({ prompt: avatarPrompt, size: imageSize, error: avatarResult.reason });
+    addImageErrorLog({
+      prompt: avatarPrompt,
+      size: imageSize,
+      error: avatarResult.reason,
+      model,
+      provider
+    });
   }
   if (mapResult.status === 'rejected') {
-    addImageErrorLog({ prompt: mapPrompt, size: imageSize, error: mapResult.reason });
+    addImageErrorLog({
+      prompt: mapPrompt,
+      size: imageSize,
+      error: mapResult.reason,
+      model,
+      provider
+    });
   }
 
   const avatarImage =
@@ -687,11 +903,26 @@ const buildFirstQuest = (questMaster) => {
 const baseTaskLine = (questMaster) =>
   questMaster.tasks.map((task) => `【节点 ${task.id}】${task.summary}`);
 
-const buildGenesisPayload = async ({ apiKey, input }) => {
+const buildGenesisPayload = async ({ input, modelSettings }) => {
+  const resolvedSettings = getModelSettings({ modelSettings });
+  const highQuality = resolvedSettings.selections.textHigh;
+  const imageSelection = resolvedSettings.selections.image;
+  const generationApiKey = getProviderApiKey(highQuality.provider, resolvedSettings);
+  const imageApiKey = getProviderApiKey(imageSelection.provider, resolvedSettings);
+
+  if (!generationApiKey) {
+    throw new Error('缺少高质量文本生成 API Key。');
+  }
+  if (!imageApiKey) {
+    throw new Error('缺少图像生成 API Key。');
+  }
+
   const worldBuilder = await generateWorldBuilder({
-    apiKey,
+    apiKey: generationApiKey,
     input,
-    settings: input.settings
+    settings: input.settings,
+    provider: highQuality.provider,
+    model: highQuality.model
   });
 
   const fallbackTasks = worldBuilder.map.slice(0, 5).map((node, index) => ({
@@ -701,13 +932,36 @@ const buildGenesisPayload = async ({ apiKey, input }) => {
 
   let questMasterRaw;
   const [narrator, questMaster, skillMaster] = await Promise.all([
-    generateNarrator({ apiKey, input, worldBuilder }),
-    generateQuestMaster({ apiKey, input, worldBuilder }),
-    generateSkillMaster({ apiKey, input, worldBuilder })
+    generateNarrator({
+      apiKey: generationApiKey,
+      input,
+      worldBuilder,
+      provider: highQuality.provider,
+      model: highQuality.model
+    }),
+    generateQuestMaster({
+      apiKey: generationApiKey,
+      input,
+      worldBuilder,
+      provider: highQuality.provider,
+      model: highQuality.model
+    }),
+    generateSkillMaster({
+      apiKey: generationApiKey,
+      input,
+      worldBuilder,
+      provider: highQuality.provider,
+      model: highQuality.model
+    })
   ]);
 
   questMasterRaw = normalizeQuestMaster(questMaster, fallbackTasks);
-  const assets = await buildAssets(worldBuilder, apiKey);
+  const assets = await buildAssets({
+    worldBuilder,
+    apiKey: imageApiKey,
+    provider: imageSelection.provider,
+    model: imageSelection.model
+  });
 
   const character = buildCharacter(input, worldBuilder, assets);
   const world = buildWorld(worldBuilder);
@@ -729,6 +983,88 @@ const buildGenesisPayload = async ({ apiKey, input }) => {
   };
 };
 
+const testTextModel = async ({ provider, apiKey, model }) => {
+  if (!apiKey) throw new Error('Missing API key');
+  if (provider === 'openai' || provider === 'doubao') {
+    const baseUrl = provider === 'openai' ? PROVIDER_BASE_URLS.openai : PROVIDER_BASE_URLS.doubao;
+    const response = await fetch(`${baseUrl}/responses`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${apiKey}`
+      },
+      body: JSON.stringify({ model, input: 'ping' })
+    });
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(`${provider} text test failed: ${response.status} ${errorText}`);
+    }
+    return;
+  }
+
+  if (provider === 'deepseek' || provider === 'qwen') {
+    const baseUrl = provider === 'deepseek' ? PROVIDER_BASE_URLS.deepseek : PROVIDER_BASE_URLS.qwenText;
+    const response = await fetch(`${baseUrl}/chat/completions`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${apiKey}`
+      },
+      body: JSON.stringify({
+        model,
+        messages: [{ role: 'user', content: 'ping' }],
+        stream: false
+      })
+    });
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(`${provider} text test failed: ${response.status} ${errorText}`);
+    }
+    return;
+  }
+
+  throw new Error(`Unsupported provider: ${provider}`);
+};
+
+const runModelTests = async ({ providers }) => {
+  const results = [];
+  const providerIds = Object.keys(providers || {});
+
+  for (const provider of providerIds) {
+    const apiKey = providers?.[provider]?.apiKey || process.env[PROVIDER_ENV_KEYS[provider]];
+    if (!apiKey) continue;
+    const textSets = [
+      { type: 'textLow', models: MODEL_CATALOG.textLow[provider] || [] },
+      { type: 'textHigh', models: MODEL_CATALOG.textHigh[provider] || [] }
+    ];
+    for (const set of textSets) {
+      for (const model of set.models) {
+        try {
+          await testTextModel({ provider, apiKey, model });
+          results.push({ provider, model, type: set.type, ok: true });
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          results.push({ provider, model, type: set.type, ok: false, message });
+        }
+      }
+    }
+
+    const imageModels = MODEL_CATALOG.image[provider] || [];
+    for (const model of imageModels) {
+      try {
+        const size = provider === 'qwen' ? '512*512' : provider === 'doubao' ? '2K' : '512x512';
+        await callImageModel({ provider, apiKey, model, prompt: '测试图片', size });
+        results.push({ provider, model, type: 'image', ok: true });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        results.push({ provider, model, type: 'image', ok: false, message });
+      }
+    }
+  }
+
+  return results;
+};
+
 app.get('/api/health', (req, res) => {
   res.json({ ok: true });
 });
@@ -737,15 +1073,27 @@ app.get('/api/logs', (req, res) => {
   res.json({ logs: llmLogs });
 });
 
+app.post('/api/settings/test', async (req, res) => {
+  const providers = req.body?.providers || {};
+  try {
+    const results = await runModelTests({ providers });
+    res.json({ ok: true, results });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    res.status(500).json({ ok: false, error: message });
+  }
+});
+
 app.post('/api/genesis/checks', async (req, res) => {
-  const settings = req.body || {};
+  const settingsPayload = req.body || {};
+  const settings = settingsPayload.settings || settingsPayload;
+  const modelSettings = settingsPayload.modelSettings || settings.modelSettings || {};
   const worldDescRaw = settings.worldDesc?.trim() || '';
   const charDescRaw = settings.charDesc?.trim() || '';
-  const apiKey = getApiKey(req);
 
   await wait(SIMULATION_DELAY);
 
-  const checkPayload = await runGenesisChecks({ worldDescRaw, charDescRaw, apiKey });
+  const checkPayload = await runGenesisChecks({ worldDescRaw, charDescRaw, modelSettings });
   if (!checkPayload.ok) {
     const statusCode = checkPayload.error ? 502 : 400;
     return res.status(statusCode).json(checkPayload);
@@ -756,13 +1104,7 @@ app.post('/api/genesis/checks', async (req, res) => {
 
 app.post('/api/genesis/build', async (req, res) => {
   const payload = req.body || {};
-  const apiKey = getApiKey(req);
-  if (!apiKey) {
-    return res.status(401).json({
-      ok: false,
-      error: '缺少 API Key，无法执行创世纪构建。'
-    });
-  }
+  const modelSettings = payload.modelSettings || {};
 
   await wait(SIMULATION_DELAY);
 
@@ -780,7 +1122,7 @@ app.post('/api/genesis/build', async (req, res) => {
   };
 
   try {
-    const buildPayload = await buildGenesisPayload({ apiKey, input });
+    const buildPayload = await buildGenesisPayload({ input, modelSettings });
     return res.json({
       ok: true,
       ...buildPayload
@@ -795,14 +1137,15 @@ app.post('/api/genesis/build', async (req, res) => {
 });
 
 app.post('/api/genesis', async (req, res) => {
-  const settings = req.body || {};
+  const settingsPayload = req.body || {};
+  const settings = settingsPayload.settings || settingsPayload;
+  const modelSettings = settingsPayload.modelSettings || settings.modelSettings || {};
   const worldDescRaw = settings.worldDesc?.trim() || '';
   const charDescRaw = settings.charDesc?.trim() || '';
-  const apiKey = getApiKey(req);
 
   await wait(SIMULATION_DELAY);
 
-  const checkPayload = await runGenesisChecks({ worldDescRaw, charDescRaw, apiKey });
+  const checkPayload = await runGenesisChecks({ worldDescRaw, charDescRaw, modelSettings });
   if (!checkPayload.ok) {
     const statusCode = checkPayload.error ? 502 : 400;
     return res.status(statusCode).json(checkPayload);
@@ -819,7 +1162,7 @@ app.post('/api/genesis', async (req, res) => {
   };
 
   try {
-    const buildPayload = await buildGenesisPayload({ apiKey, input });
+    const buildPayload = await buildGenesisPayload({ input, modelSettings });
     res.json({
       ok: true,
       checks: checkPayload.checks,
