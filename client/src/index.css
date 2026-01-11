@@ -57,3 +57,34 @@ body {
     transform: rotate(360deg);
   }
 }
+
+@keyframes genesis-pulse {
+  0% {
+    opacity: 0;
+    filter: blur(1px);
+  }
+  25% {
+    opacity: 1;
+    filter: blur(0px);
+  }
+  50% {
+    opacity: 0;
+    filter: blur(1px);
+  }
+  75% {
+    opacity: 1;
+    filter: blur(0px);
+  }
+  100% {
+    opacity: 0;
+    filter: blur(1px);
+  }
+}
+
+.genesis-title {
+  background: linear-gradient(120deg, rgba(34, 211, 238, 0.9), rgba(217, 70, 239, 0.9));
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  animation: genesis-pulse 2.6s ease-in-out infinite;
+}

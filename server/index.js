@@ -279,6 +279,56 @@ const runPromptChecks = async (worldDescRaw, charDescRaw, apiKey) => {
   }
 };
 
+const runGenesisChecks = async ({ worldDescRaw, charDescRaw, apiKey }) => {
+  if (!apiKey) {
+    return {
+      ok: false,
+      checks: {
+        safety: { status: 'fail', message: '缺少 API Key，无法执行安全检查。' },
+        utility: { status: 'fail', message: '缺少 API Key，无法执行效用检查。' },
+        expansion: { status: 'fail', message: '缺少 API Key，无法执行扩展检查。' },
+        builder: { status: 'fail', message: '缺少 API Key，无法执行构建检查。' }
+      },
+      sanitizedInput: {
+        worldDesc: sanitizePrompt(worldDescRaw, { removeTaskDirectives: true }),
+        charDesc: sanitizePrompt(charDescRaw)
+      }
+    };
+  }
+
+  let checkPayload;
+  try {
+    checkPayload = await runPromptChecks(worldDescRaw, charDescRaw, apiKey);
+  } catch (error) {
+    return {
+      ok: false,
+      error: '安全检查服务不可用，请稍后重试。',
+      checks: {
+        safety: { status: 'fail', message: '安全检查失败。' },
+        utility: { status: 'fail', message: '效用检查失败。' },
+        expansion: { status: 'fail', message: '扩展检查失败。' },
+        builder: { status: 'fail', message: '构建检查失败。' }
+      },
+      sanitizedInput: {
+        worldDesc: sanitizePrompt(worldDescRaw, { removeTaskDirectives: true }),
+        charDesc: sanitizePrompt(charDescRaw)
+      }
+    };
+  }
+
+  const { checks, sanitizedInput } = checkPayload;
+  const shouldBlock =
+    checks.safety.status !== 'pass' ||
+    checks.utility.status !== 'pass' ||
+    checks.builder.status !== 'pass';
+
+  return {
+    ok: !shouldBlock,
+    checks,
+    sanitizedInput
+  };
+};
+
 const allocateStats = (settings) => {
   const base = { str: 3, dex: 3, int: 3, cha: 3 };
   let remaining = 3;
@@ -580,12 +630,111 @@ const buildFirstQuest = (questMaster) => {
 const baseTaskLine = (questMaster) =>
   questMaster.tasks.map((task) => `【节点 ${task.id}】${task.summary}`);
 
+const buildGenesisPayload = async ({ apiKey, input }) => {
+  const worldBuilder = await generateWorldBuilder({
+    apiKey,
+    input,
+    settings: input.settings
+  });
+
+  const fallbackTasks = worldBuilder.map.slice(0, 5).map((node, index) => ({
+    id: index + 1,
+    summary: `任务 ${index + 1}：前往${node.name}，调查与${worldBuilder.factions[index % 4]?.name || '未知势力'}有关的异动。`
+  }));
+
+  let questMasterRaw;
+  const [narrator, questMaster, skillMaster] = await Promise.all([
+    generateNarrator({ apiKey, input, worldBuilder }),
+    generateQuestMaster({ apiKey, input, worldBuilder }),
+    generateSkillMaster({ apiKey, input, worldBuilder })
+  ]);
+
+  questMasterRaw = normalizeQuestMaster(questMaster, fallbackTasks);
+  const assets = await buildAssets(worldBuilder, apiKey);
+
+  const character = buildCharacter(input, worldBuilder, assets);
+  const world = buildWorld(worldBuilder);
+  const firstQuest = buildFirstQuest(questMasterRaw);
+
+  return {
+    playerInput: input,
+    worldBuilder,
+    multiAgent: {
+      narrator,
+      questMaster: questMasterRaw,
+      skillMaster
+    },
+    assets,
+    character,
+    world,
+    taskLine: baseTaskLine(questMasterRaw),
+    firstQuest
+  };
+};
+
 app.get('/api/health', (req, res) => {
   res.json({ ok: true });
 });
 
 app.get('/api/logs', (req, res) => {
   res.json({ logs: llmLogs });
+});
+
+app.post('/api/genesis/checks', async (req, res) => {
+  const settings = req.body || {};
+  const worldDescRaw = settings.worldDesc?.trim() || '';
+  const charDescRaw = settings.charDesc?.trim() || '';
+  const apiKey = getApiKey(req);
+
+  await wait(SIMULATION_DELAY);
+
+  const checkPayload = await runGenesisChecks({ worldDescRaw, charDescRaw, apiKey });
+  if (!checkPayload.ok) {
+    const statusCode = checkPayload.error ? 502 : 400;
+    return res.status(statusCode).json(checkPayload);
+  }
+
+  res.json(checkPayload);
+});
+
+app.post('/api/genesis/build', async (req, res) => {
+  const payload = req.body || {};
+  const apiKey = getApiKey(req);
+  if (!apiKey) {
+    return res.status(401).json({
+      ok: false,
+      error: '缺少 API Key，无法执行创世纪构建。'
+    });
+  }
+
+  await wait(SIMULATION_DELAY);
+
+  const worldDescRaw = payload.worldDesc?.trim() || '';
+  const charDescRaw = payload.charDesc?.trim() || '';
+  const sanitized = payload.sanitizedInput || {};
+  const input = {
+    worldDesc: sanitized.worldDesc || worldDescRaw,
+    charDesc: sanitized.charDesc || charDescRaw,
+    settings: {
+      magic: payload.settings?.magic || 'mid',
+      physics: payload.settings?.physics || 'mid',
+      tech: payload.settings?.tech || 'mid'
+    }
+  };
+
+  try {
+    const buildPayload = await buildGenesisPayload({ apiKey, input });
+    return res.json({
+      ok: true,
+      ...buildPayload
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return res.status(502).json({
+      ok: false,
+      error: `创世纪生成失败：${message}`
+    });
+  }
 });
 
 app.post('/api/genesis', async (req, res) => {
@@ -596,61 +745,15 @@ app.post('/api/genesis', async (req, res) => {
 
   await wait(SIMULATION_DELAY);
 
-  if (!apiKey) {
-    return res.status(401).json({
-      ok: false,
-      checks: {
-        safety: { status: 'fail', message: '缺少 API Key，无法执行安全检查。' },
-        utility: { status: 'fail', message: '缺少 API Key，无法执行效用检查。' },
-        expansion: { status: 'fail', message: '缺少 API Key，无法执行扩展检查。' },
-        builder: { status: 'fail', message: '缺少 API Key，无法执行构建检查。' }
-      },
-      sanitizedInput: {
-        worldDesc: sanitizePrompt(worldDescRaw, { removeTaskDirectives: true }),
-        charDesc: sanitizePrompt(charDescRaw)
-      }
-    });
+  const checkPayload = await runGenesisChecks({ worldDescRaw, charDescRaw, apiKey });
+  if (!checkPayload.ok) {
+    const statusCode = checkPayload.error ? 502 : 400;
+    return res.status(statusCode).json(checkPayload);
   }
-
-  let checkPayload;
-  try {
-    checkPayload = await runPromptChecks(worldDescRaw, charDescRaw, apiKey);
-  } catch (error) {
-    return res.status(502).json({
-      ok: false,
-      error: '安全检查服务不可用，请稍后重试。',
-      checks: {
-        safety: { status: 'fail', message: '安全检查失败。' },
-        utility: { status: 'fail', message: '效用检查失败。' },
-        expansion: { status: 'fail', message: '扩展检查失败。' },
-        builder: { status: 'fail', message: '构建检查失败。' }
-      },
-      sanitizedInput: {
-        worldDesc: sanitizePrompt(worldDescRaw, { removeTaskDirectives: true }),
-        charDesc: sanitizePrompt(charDescRaw)
-      }
-    });
-  }
-
-  const { checks, sanitizedInput } = checkPayload;
-  const shouldBlock =
-    checks.safety.status !== 'pass' ||
-    checks.utility.status !== 'pass' ||
-    checks.builder.status !== 'pass';
-
-  if (shouldBlock) {
-    return res.status(400).json({
-      ok: false,
-      checks,
-      sanitizedInput
-    });
-  }
-
-  await wait(SIMULATION_DELAY);
 
   const input = {
-    worldDesc: sanitizedInput.worldDesc || worldDescRaw,
-    charDesc: sanitizedInput.charDesc || charDescRaw,
+    worldDesc: checkPayload.sanitizedInput.worldDesc || worldDescRaw,
+    charDesc: checkPayload.sanitizedInput.charDesc || charDescRaw,
     settings: {
       magic: settings.magic || 'mid',
       physics: settings.physics || 'mid',
@@ -658,31 +761,13 @@ app.post('/api/genesis', async (req, res) => {
     }
   };
 
-  let worldBuilder;
-  let narrator;
-  let questMasterRaw;
-  let skillMaster;
-  let assets;
   try {
-    worldBuilder = await generateWorldBuilder({
-      apiKey,
-      input,
-      settings: input.settings
+    const buildPayload = await buildGenesisPayload({ apiKey, input });
+    res.json({
+      ok: true,
+      checks: checkPayload.checks,
+      ...buildPayload
     });
-
-    const fallbackTasks = worldBuilder.map.slice(0, 5).map((node, index) => ({
-      id: index + 1,
-      summary: `任务 ${index + 1}：前往${node.name}，调查与${worldBuilder.factions[index % 4]?.name || '未知势力'}有关的异动。`
-    }));
-
-    [narrator, questMasterRaw, skillMaster] = await Promise.all([
-      generateNarrator({ apiKey, input, worldBuilder }),
-      generateQuestMaster({ apiKey, input, worldBuilder }),
-      generateSkillMaster({ apiKey, input, worldBuilder })
-    ]);
-
-    questMasterRaw = normalizeQuestMaster(questMasterRaw, fallbackTasks);
-    assets = await buildAssets(worldBuilder, apiKey);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     return res.status(502).json({
@@ -690,29 +775,6 @@ app.post('/api/genesis', async (req, res) => {
       error: `创世纪生成失败：${message}`
     });
   }
-
-  const questMaster = questMasterRaw;
-
-  const character = buildCharacter(input, worldBuilder, assets);
-  const world = buildWorld(worldBuilder);
-  const firstQuest = buildFirstQuest(questMaster);
-
-  res.json({
-    ok: true,
-    checks,
-    playerInput: input,
-    worldBuilder,
-    multiAgent: {
-      narrator,
-      questMaster,
-      skillMaster
-    },
-    assets,
-    character,
-    world,
-    taskLine: baseTaskLine(questMaster),
-    firstQuest
-  });
 });
 
 app.post('/api/turn', async (req, res) => {
