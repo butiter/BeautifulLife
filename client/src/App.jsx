@@ -734,6 +734,14 @@ const SettingsView = ({ modelSettings, onSave }) => {
         {renderModelRow('textLow', '低质量文本生成', '用于安全检查与快速推理。')}
         {renderModelRow('textHigh', '高质量文本生成', '用于世界构建、人物与任务生成。')}
         {renderModelRow('image', '图像生成', '用于角色头像与地图资产。')}
+        <div className="flex justify-end">
+          <button
+            onClick={handleSave}
+            className="px-4 py-2 text-xs uppercase tracking-widest bg-cyan-900 hover:bg-cyan-800 text-cyan-100 rounded-lg border border-cyan-700"
+          >
+            保存
+          </button>
+        </div>
       </section>
 
       {isApiModalOpen && (
