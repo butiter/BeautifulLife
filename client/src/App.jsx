@@ -960,7 +960,6 @@ export default function App() {
   const [genesisError, setGenesisError] = useState('');
   const [genesisProgress, setGenesisProgress] = useState('');
   const [playerInput, setPlayerInput] = useState(null);
-  const [playerInputRaw, setPlayerInputRaw] = useState(null);
   const [worldBuilder, setWorldBuilder] = useState(null);
   const [multiAgent, setMultiAgent] = useState(null);
   const [assets, setAssets] = useState(null);
@@ -986,7 +985,6 @@ export default function App() {
       const session = JSON.parse(stored);
       if (!session?.character || !session?.world) return;
       setPlayerInput(session.playerInput || null);
-      setPlayerInputRaw(session.playerInputRaw || null);
       setWorldBuilder(session.worldBuilder || null);
       setMultiAgent(session.multiAgent || null);
       setAssets(session.assets || null);
@@ -1008,7 +1006,6 @@ export default function App() {
     if (!character || !world) return;
     const snapshot = {
       playerInput,
-      playerInputRaw,
       worldBuilder,
       multiAgent,
       assets,
@@ -1023,7 +1020,6 @@ export default function App() {
   }, [
     phase,
     playerInput,
-    playerInputRaw,
     worldBuilder,
     multiAgent,
     assets,
@@ -1156,6 +1152,7 @@ export default function App() {
       body: JSON.stringify({
         settings: worldSettings,
         modelSettings,
+        sanitizedInput: data.sanitizedInput || {},
         worldDesc: worldSettings.worldDesc,
         charDesc: worldSettings.charDesc
       })
@@ -1169,7 +1166,6 @@ export default function App() {
     }
 
     setPlayerInput(buildData.playerInput);
-    setPlayerInputRaw(buildData.playerInputRaw || null);
     setWorldBuilder(buildData.worldBuilder);
     setMultiAgent(buildData.multiAgent);
     setAssets(buildData.assets);
@@ -1184,7 +1180,6 @@ export default function App() {
       'genesisSession',
       JSON.stringify({
         playerInput: buildData.playerInput,
-        playerInputRaw: buildData.playerInputRaw || null,
         worldBuilder: buildData.worldBuilder,
         multiAgent: buildData.multiAgent,
         assets: buildData.assets,
