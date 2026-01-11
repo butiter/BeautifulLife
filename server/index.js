@@ -18,7 +18,9 @@ const CLIENT_DIST = path.join(__dirname, '../client/dist');
 
 const SIMULATION_DELAY = 700;
 const MAX_LLM_LOGS = 50;
+const MAX_PROCESS_LOGS = 80;
 const llmLogs = [];
+const processLogs = [];
 
 const MOCK_WORLD_CONTEXTS = [
   '在旧日的灰烬中，霓虹灯与古老的符文交织。巨型企业掌握着魔法源，而底层的黑客们试图解开神灵的防火墙。',
@@ -144,6 +146,28 @@ const addLlmLog = (entry) => {
   if (llmLogs.length > MAX_LLM_LOGS) {
     llmLogs.shift();
   }
+};
+
+const addProcessLog = (message, meta = {}) => {
+  processLogs.push({
+    id: nanoid(8),
+    createdAt: new Date().toISOString(),
+    message,
+    meta
+  });
+  if (processLogs.length > MAX_PROCESS_LOGS) {
+    processLogs.shift();
+  }
+};
+
+const addImageSuccessLog = ({ prompt, size, output, model, provider }) => {
+  addLlmLog({
+    id: nanoid(8),
+    createdAt: new Date().toISOString(),
+    model,
+    input: { tag: 'image_generation', prompt, size, provider },
+    output
+  });
 };
 
 const addImageErrorLog = ({ prompt, size, error, model, provider }) => {
@@ -818,6 +842,7 @@ const normalizeQuestMaster = (questMaster, fallbackTasks) => {
 };
 
 const buildAssets = async ({ worldBuilder, apiKey, provider, model }) => {
+  addProcessLog('进入资产生成流程', { provider, model });
   const avatarPrompt = `角色头像：${worldBuilder.character_appearance || '神秘旅者，目光坚定'}。风格关键词：${worldBuilder.pic_style.join('，')}。半身近景，单一角色，清晰面部细节。`;
   const mapPlaces = worldBuilder.map
     .slice(0, 10)
@@ -839,6 +864,16 @@ const buildAssets = async ({ worldBuilder, apiKey, provider, model }) => {
       model,
       provider
     });
+    addProcessLog('头像图片生成失败', { provider, model });
+  } else {
+    addImageSuccessLog({
+      prompt: avatarPrompt,
+      size: imageSize,
+      output: avatarResult.value,
+      model,
+      provider
+    });
+    addProcessLog('头像图片生成完成', { provider, model });
   }
   if (mapResult.status === 'rejected') {
     addImageErrorLog({
@@ -848,6 +883,16 @@ const buildAssets = async ({ worldBuilder, apiKey, provider, model }) => {
       model,
       provider
     });
+    addProcessLog('地图图片生成失败', { provider, model });
+  } else {
+    addImageSuccessLog({
+      prompt: mapPrompt,
+      size: imageSize,
+      output: mapResult.value,
+      model,
+      provider
+    });
+    addProcessLog('地图图片生成完成', { provider, model });
   }
 
   const avatarImage =
@@ -906,6 +951,7 @@ const baseTaskLine = (questMaster) =>
   questMaster.tasks.map((task) => `【节点 ${task.id}】${task.summary}`);
 
 const buildGenesisPayload = async ({ input, modelSettings }) => {
+  addProcessLog('进入创世纪构建流程');
   const resolvedSettings = getModelSettings({ modelSettings });
   const highQuality = resolvedSettings.selections.textHigh;
   const imageSelection = resolvedSettings.selections.image;
@@ -926,6 +972,7 @@ const buildGenesisPayload = async ({ input, modelSettings }) => {
     provider: highQuality.provider,
     model: highQuality.model
   });
+  addProcessLog('世界构建完成', { provider: highQuality.provider, model: highQuality.model });
 
   const fallbackTasks = worldBuilder.map.slice(0, 5).map((node, index) => ({
     id: index + 1,
@@ -956,6 +1003,7 @@ const buildGenesisPayload = async ({ input, modelSettings }) => {
       model: highQuality.model
     })
   ]);
+  addProcessLog('多智能体剧情生成完成', { provider: highQuality.provider, model: highQuality.model });
 
   questMasterRaw = normalizeQuestMaster(questMaster, fallbackTasks);
   const assets = await buildAssets({
@@ -964,10 +1012,15 @@ const buildGenesisPayload = async ({ input, modelSettings }) => {
     provider: imageSelection.provider,
     model: imageSelection.model
   });
+  addProcessLog('创世纪资产生成完成', {
+    provider: imageSelection.provider,
+    model: imageSelection.model
+  });
 
   const character = buildCharacter(input, worldBuilder, assets);
   const world = buildWorld(worldBuilder);
   const firstQuest = buildFirstQuest(questMasterRaw);
+  addProcessLog('创世纪构建完成');
 
   return {
     playerInput: input,
@@ -1085,7 +1138,7 @@ app.get('/api/health', (req, res) => {
 });
 
 app.get('/api/logs', (req, res) => {
-  res.json({ logs: llmLogs });
+  res.json({ processLogs, llmLogs });
 });
 
 app.post('/api/settings/test', async (req, res) => {
@@ -1121,6 +1174,7 @@ app.post('/api/settings/test-item', async (req, res) => {
 });
 
 app.post('/api/genesis/checks', async (req, res) => {
+  addProcessLog('进入创世纪校验流程');
   const settingsPayload = req.body || {};
   const settings = settingsPayload.settings || settingsPayload;
   const modelSettings = settingsPayload.modelSettings || settings.modelSettings || {};
@@ -1132,13 +1186,16 @@ app.post('/api/genesis/checks', async (req, res) => {
   const checkPayload = await runGenesisChecks({ worldDescRaw, charDescRaw, modelSettings });
   if (!checkPayload.ok) {
     const statusCode = checkPayload.error ? 502 : 400;
+    addProcessLog('创世纪校验失败');
     return res.status(statusCode).json(checkPayload);
   }
 
+  addProcessLog('创世纪校验通过');
   res.json(checkPayload);
 });
 
 app.post('/api/genesis/build', async (req, res) => {
+  addProcessLog('进入创世纪生成流程');
   const payload = req.body || {};
   const modelSettings = payload.modelSettings || {};
 
@@ -1159,12 +1216,14 @@ app.post('/api/genesis/build', async (req, res) => {
 
   try {
     const buildPayload = await buildGenesisPayload({ input, modelSettings });
+    addProcessLog('创世纪生成成功');
     return res.json({
       ok: true,
       ...buildPayload
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
+    addProcessLog('创世纪生成失败', { error: message });
     return res.status(502).json({
       ok: false,
       error: `创世纪生成失败：${message}`

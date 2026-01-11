@@ -367,7 +367,8 @@ const DebugView = () => {
 };
 
 const LogView = () => {
-  const [logs, setLogs] = useState([]);
+  const [processLogs, setProcessLogs] = useState([]);
+  const [llmLogs, setLlmLogs] = useState([]);
   const [status, setStatus] = useState('idle');
   const [error, setError] = useState('');
 
@@ -377,7 +378,8 @@ const LogView = () => {
     try {
       const response = await fetch(`${API_BASE}/api/logs`);
       const data = await response.json();
-      setLogs(Array.isArray(data.logs) ? data.logs : []);
+      setProcessLogs(Array.isArray(data.processLogs) ? data.processLogs : []);
+      setLlmLogs(Array.isArray(data.llmLogs) ? data.llmLogs : []);
       setStatus('ready');
     } catch (err) {
       const message = err instanceof Error ? err.message : '日志加载失败';
@@ -394,8 +396,8 @@ const LogView = () => {
     <div className="min-h-screen bg-slate-950 text-slate-200 p-8 space-y-6">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-3xl font-semibold text-white">LLM 调用日志</h1>
-          <p className="text-xs text-slate-400 mt-1">记录每次 LLM 输入与返回文本。</p>
+          <h1 className="text-3xl font-semibold text-white">Genesis 日志控制台</h1>
+          <p className="text-xs text-slate-400 mt-1">流程日志与 LLM 调用记录。</p>
         </div>
         <div className="flex items-center gap-3">
           <button
@@ -423,7 +425,7 @@ const LogView = () => {
         </div>
       )}
 
-      {!logs.length && status === 'ready' && !error && (
+      {!processLogs.length && !llmLogs.length && status === 'ready' && !error && (
         <div className="flex flex-col items-center justify-center p-8 border border-slate-800 rounded-xl bg-slate-900/40">
           <Terminal size={48} className="text-cyan-400 mb-4" />
           <p className="text-slate-400">暂无日志，请先完成一次 LLM 调用。</p>
@@ -431,29 +433,72 @@ const LogView = () => {
       )}
 
       <div className="space-y-4">
-        {logs.map((log) => (
-          <div
-            key={log.id}
-            className="bg-slate-900/70 border border-slate-800 rounded-xl p-4 space-y-3"
-          >
-            <div className="flex flex-wrap items-center justify-between gap-3 text-xs text-slate-400">
-              <span>时间：{log.createdAt}</span>
-              <span>模型：{log.model}</span>
-            </div>
-            <div className="grid gap-3 md:grid-cols-2 text-xs">
-              <div className="bg-slate-950/60 border border-slate-800 rounded-lg p-3">
-                <p className="text-slate-400 mb-2">输入</p>
-                <pre className="whitespace-pre-wrap text-slate-200">
-                  {JSON.stringify(log.input, null, 2)}
-                </pre>
-              </div>
-              <div className="bg-slate-950/60 border border-slate-800 rounded-lg p-3">
-                <p className="text-slate-400 mb-2">输出</p>
-                <pre className="whitespace-pre-wrap text-slate-200">{log.output}</pre>
-              </div>
-            </div>
+        <section className="space-y-3">
+          <div className="flex items-center justify-between text-sm text-slate-300">
+            <h2 className="text-base text-cyan-300">流程日志</h2>
+            <span className="text-xs text-slate-500">记录创世纪流程关键步骤。</span>
           </div>
-        ))}
+          {!processLogs.length ? (
+            <div className="bg-slate-900/50 border border-slate-800 rounded-xl p-4 text-sm text-slate-400">
+              暂无流程日志。
+            </div>
+          ) : (
+            <div className="space-y-3">
+              {processLogs.map((log) => (
+                <div
+                  key={log.id}
+                  className="bg-slate-900/70 border border-slate-800 rounded-xl p-4 flex flex-col gap-2 text-xs"
+                >
+                  <div className="flex flex-wrap items-center justify-between gap-3 text-slate-400">
+                    <span>时间：{log.createdAt}</span>
+                    <span>流程：{log.message}</span>
+                  </div>
+                  {log.meta && Object.keys(log.meta).length > 0 && (
+                    <pre className="whitespace-pre-wrap text-slate-200 bg-slate-950/60 border border-slate-800 rounded-lg p-3">
+                      {JSON.stringify(log.meta, null, 2)}
+                    </pre>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+        </section>
+
+        <section className="space-y-3">
+          <div className="flex items-center justify-between text-sm text-slate-300">
+            <h2 className="text-base text-cyan-300">LLM 调用日志</h2>
+            <span className="text-xs text-slate-500">记录模型输入与返回。</span>
+          </div>
+          {!llmLogs.length ? (
+            <div className="bg-slate-900/50 border border-slate-800 rounded-xl p-4 text-sm text-slate-400">
+              暂无 LLM 日志。
+            </div>
+          ) : (
+            llmLogs.map((log) => (
+              <div
+                key={log.id}
+                className="bg-slate-900/70 border border-slate-800 rounded-xl p-4 space-y-3"
+              >
+                <div className="flex flex-wrap items-center justify-between gap-3 text-xs text-slate-400">
+                  <span>时间：{log.createdAt}</span>
+                  <span>模型：{log.model}</span>
+                </div>
+                <div className="grid gap-3 md:grid-cols-2 text-xs">
+                  <div className="bg-slate-950/60 border border-slate-800 rounded-lg p-3">
+                    <p className="text-slate-400 mb-2">输入</p>
+                    <pre className="whitespace-pre-wrap text-slate-200">
+                      {JSON.stringify(log.input, null, 2)}
+                    </pre>
+                  </div>
+                  <div className="bg-slate-950/60 border border-slate-800 rounded-lg p-3">
+                    <p className="text-slate-400 mb-2">输出</p>
+                    <pre className="whitespace-pre-wrap text-slate-200">{log.output}</pre>
+                  </div>
+                </div>
+              </div>
+            ))
+          )}
+        </section>
       </div>
     </div>
   );
@@ -909,6 +954,7 @@ export default function App() {
   const [saveStatus, setSaveStatus] = useState('idle');
   const [genesisChecks, setGenesisChecks] = useState(buildGenesisChecks());
   const [genesisError, setGenesisError] = useState('');
+  const [genesisProgress, setGenesisProgress] = useState('');
   const [playerInput, setPlayerInput] = useState(null);
   const [worldBuilder, setWorldBuilder] = useState(null);
   const [multiAgent, setMultiAgent] = useState(null);
@@ -924,6 +970,7 @@ export default function App() {
   });
 
   const scrollRef = useRef(null);
+  const progressTimersRef = useRef([]);
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
@@ -980,6 +1027,12 @@ export default function App() {
     localStorage.setItem('genesisModelSettings', JSON.stringify(modelSettings));
   }, [modelSettings]);
 
+  useEffect(() => {
+    if (phase === 'GENESIS_LOADING') return;
+    progressTimersRef.current.forEach((timer) => clearTimeout(timer));
+    progressTimersRef.current = [];
+  }, [phase]);
+
   const buildHeaders = () => ({ 'Content-Type': 'application/json' });
 
   useEffect(() => {
@@ -997,6 +1050,7 @@ export default function App() {
     setPhase('GENESIS');
     setGenesisChecks(buildGenesisChecks());
     setGenesisError('');
+    setGenesisProgress('');
 
     const response = await fetch(`${API_BASE}/api/genesis/checks`, {
       method: 'POST',
@@ -1042,6 +1096,12 @@ export default function App() {
     }
 
     setPhase('GENESIS_LOADING');
+    setGenesisProgress('正在生成世界构建...');
+    progressTimersRef.current.forEach((timer) => clearTimeout(timer));
+    progressTimersRef.current = [
+      window.setTimeout(() => setGenesisProgress('正在生成叙事与任务线...'), 1200),
+      window.setTimeout(() => setGenesisProgress('正在生成角色与资产...'), 2400)
+    ];
 
     const buildResponse = await fetch(`${API_BASE}/api/genesis/build`, {
       method: 'POST',
@@ -1058,6 +1118,7 @@ export default function App() {
 
     if (!buildData.ok) {
       setGenesisError(buildData.error || '创世纪生成失败，请稍后重试。');
+      progressTimersRef.current.forEach((timer) => clearTimeout(timer));
       return;
     }
 
@@ -1102,6 +1163,8 @@ export default function App() {
     );
 
     await sleep(800);
+    progressTimersRef.current.forEach((timer) => clearTimeout(timer));
+    setGenesisProgress('');
     setPhase('GAME');
   };
 
@@ -1270,6 +1333,9 @@ export default function App() {
           创世纪
         </div>
         <p className="text-xs uppercase tracking-[0.35em] text-slate-500">Genesis Loading</p>
+        {genesisProgress && (
+          <p className="text-sm text-slate-300 tracking-wide">{genesisProgress}</p>
+        )}
         {genesisError && (
           <div className="bg-rose-500/10 border border-rose-500/40 text-rose-200 rounded-xl p-4 text-sm max-w-md">
             {genesisError}
