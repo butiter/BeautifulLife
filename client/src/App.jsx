@@ -1152,6 +1152,7 @@ export default function App() {
       body: JSON.stringify({
         settings: worldSettings,
         modelSettings,
+        sanitizedInput: data.sanitizedInput || {},
         worldDesc: worldSettings.worldDesc,
         charDesc: worldSettings.charDesc
       })
