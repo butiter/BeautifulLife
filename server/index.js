@@ -848,7 +848,7 @@ const buildAssets = async ({ worldBuilder, apiKey, provider, model }) => {
     .slice(0, 10)
     .map((node) => node.name)
     .join('、');
-  const mapPrompt = `世界地图：包含${mapPlaces}等地点，适度标注文字说明。风格关键词：${worldBuilder.pic_style.join('，')}。简洁清晰、易读。`;
+  const mapPrompt = `生成一张花在羊皮卷上的虚拟世界地图，该世界的世界观包含一定的魔法和武力。你的地图里需要包含${mapPlaces}等地点，每个地点用是一个图标，像是游戏里的那种，不要有任何文字。每个图标位置有一个明确的圆或小点点或者什么东西作为地点标识。风格关键词：${worldBuilder.pic_style.join('，')}。简洁清晰、易读。`;
   const imageSize = provider === 'qwen' ? '768*768' : '1024x1024';
 
   const [avatarResult, mapResult] = await Promise.allSettled([
