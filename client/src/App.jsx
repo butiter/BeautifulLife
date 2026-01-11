@@ -27,11 +27,8 @@ const PROVIDERS = {
 const MODEL_OPTIONS = {
   textLow: {
     doubao: [
-      { id: 'doubao-seed-1.8', label: 'doubao-seed-1.8' },
-      { id: 'doubao-seed-1.6-lite', label: 'doubao-seed-1.6-lite' },
-      { id: 'doubao-seed-1.6-flash', label: 'doubao-seed-1.6-flash' },
-      { id: 'doubao-1.5-pro-32k', label: 'doubao-1.5-pro-32k' },
-      { id: 'doubao-1.5-lite-32k', label: 'doubao-1.5-lite-32k' }
+      { id: 'doubao-seed-1-8-251228', label: 'doubao-seed-1-8-251228' },
+      { id: 'doubao-seed-1-6-flash-250828', label: 'doubao-seed-1-6-flash-250828' }
     ],
     qwen: [
       { id: 'qwen-mt-lite', label: 'qwen-mt-lite' },
@@ -42,13 +39,13 @@ const MODEL_OPTIONS = {
     openai: [
       { id: 'gpt-4.1-nano', label: 'gpt-4.1-nano(最快)' },
       { id: 'gpt-5-nano', label: 'gpt-5-nano' },
-      { id: 'gpt-5.2-nano', label: 'gpt-5.2-nano' }
+      { id: 'gpt-5-mini', label: 'gpt-5-mini' }
     ]
   },
   textHigh: {
     doubao: [
-      { id: 'doubao-seed-1.8', label: 'doubao-seed-1.8' },
-      { id: 'doubao-1.5-pro-32k', label: 'doubao-1.5-pro-32k' }
+      { id: 'doubao-seed-1-8-251228', label: 'doubao-seed-1-8-251228' },
+      { id: 'doubao-seed-1-6-lite-251015', label: 'doubao-seed-1-6-lite-251015' }
     ],
     qwen: [
       { id: 'qwen3-max', label: 'qwen3-max' },
@@ -59,26 +56,23 @@ const MODEL_OPTIONS = {
       { id: 'deepseek-reasoner', label: 'deepseek-reasoner' }
     ],
     openai: [
-      { id: 'gpt-4.1-mini', label: 'gpt-4.1-mini' },
+      { id: 'gpt-5.2', label: 'gpt-5.2' },
       { id: 'gpt-5-mini', label: 'gpt-5-mini' },
-      { id: 'gpt-5.2-mini', label: 'gpt-5.2-mini' },
-      { id: 'gpt-5.2', label: 'gpt-5.2' }
+      { id: 'gpt-4.1-mini', label: 'gpt-4.1-mini' }
     ]
   },
   image: {
     doubao: [
-      { id: 'doubao-seedream-4.5', label: 'doubao-seedream-4.5' },
-      { id: 'doubao-seedream-4.0', label: 'doubao-seedream-4.0' },
-      { id: 'doubao-seedream-3.0-t2i', label: 'doubao-seedream-3.0-t2i' },
-      { id: 'doubao-seededit-3.0-i2i', label: 'doubao-seededit-3.0-i2i' }
+      { id: 'doubao-seedream-4-5-251128', label: 'doubao-seedream-4-5-251128' },
+      { id: 'doubao-seedream-4-0-250828', label: 'doubao-seedream-4-0-250828' }
     ],
     qwen: [
       { id: 'qwen-image-plus', label: 'qwen-image-plus' },
       { id: 'qwen-image', label: 'qwen-image' }
     ],
     openai: [
-      { id: 'gpt-image-1-mini', label: 'gpt-image-1-mini(可能需要权限)' },
       { id: 'gpt-image-1', label: 'gpt-image-1(可能需要权限)' },
+      { id: 'gpt-image-1-mini', label: 'gpt-image-1-mini(可能需要权限)' },
       { id: 'gpt-image-1.5', label: 'gpt-image-1.5(可能需要权限)' },
       { id: 'gpt-5', label: 'gpt-5(可能需要权限，相应模式)' },
       { id: 'gpt-5-mini', label: 'gpt-5-mini(可能需要权限，相应模式)' }
@@ -471,6 +465,7 @@ const SettingsView = ({ modelSettings, onSave }) => {
   const [testStatus, setTestStatus] = useState('idle');
   const [testResults, setTestResults] = useState([]);
   const [testError, setTestError] = useState('');
+  const [testProgress, setTestProgress] = useState({ completed: 0, total: 0 });
   const [showTestInfo, setShowTestInfo] = useState(true);
 
   useEffect(() => {
@@ -501,22 +496,59 @@ const SettingsView = ({ modelSettings, onSave }) => {
     onSave(normalized);
   };
 
+  const buildTestQueue = () => {
+    const tests = [];
+    Object.entries(draft.providers).forEach(([provider, detail]) => {
+      if (!detail?.apiKey) return;
+      ['textLow', 'textHigh'].forEach((type) => {
+        const models = MODEL_OPTIONS[type]?.[provider] || [];
+        models.forEach((model) => {
+          tests.push({ provider, type, model: model.id });
+        });
+      });
+      const imageModels = MODEL_OPTIONS.image?.[provider] || [];
+      imageModels.forEach((model) => {
+        tests.push({ provider, type: 'image', model: model.id });
+      });
+    });
+    return tests;
+  };
+
   const handleTest = async () => {
+    const tests = buildTestQueue();
     setTestStatus('running');
     setTestResults([]);
     setTestError('');
     setShowTestInfo(true);
+    setTestProgress({ completed: 0, total: tests.length });
+
+    if (tests.length === 0) {
+      setTestStatus('done');
+      return;
+    }
+
+    const results = [];
     try {
-      const response = await fetch(`${API_BASE}/api/settings/test`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ providers: draft.providers })
-      });
-      const data = await response.json();
-      if (!response.ok) {
-        throw new Error(data?.error || '测试失败');
+      for (const [index, test] of tests.entries()) {
+        try {
+          const response = await fetch(`${API_BASE}/api/settings/test-item`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ ...test, providers: draft.providers })
+          });
+          const data = await response.json();
+          if (!response.ok) {
+            throw new Error(data?.error || '测试失败');
+          }
+          const result = data?.result || { ...test, ok: true };
+          results.push(result);
+        } catch (error) {
+          const message = error instanceof Error ? error.message : '测试失败';
+          results.push({ ...test, ok: false, message });
+        }
+        setTestResults([...results]);
+        setTestProgress({ completed: index + 1, total: tests.length });
       }
-      setTestResults(Array.isArray(data.results) ? data.results : []);
       setTestStatus('done');
     } catch (error) {
       const message = error instanceof Error ? error.message : '测试失败';
@@ -532,6 +564,9 @@ const SettingsView = ({ modelSettings, onSave }) => {
 
   const hasTestInfo =
     testStatus === 'running' || testError || (Array.isArray(testResults) && testResults.length > 0);
+  const progressLabel = testProgress.total
+    ? `(${testProgress.completed}/${testProgress.total})`
+    : '';
 
   const renderModelRow = (key, title, description) => {
     const selection = draft.selections[key];
@@ -637,7 +672,7 @@ const SettingsView = ({ modelSettings, onSave }) => {
         {showTestInfo && testStatus === 'running' && (
           <div className="flex items-center gap-2 text-sm text-cyan-300">
             <Spinner />
-            正在测试 API 模型可用性...
+            正在测试 API 模型可用性... {progressLabel}
           </div>
         )}
 
@@ -649,7 +684,12 @@ const SettingsView = ({ modelSettings, onSave }) => {
 
         {showTestInfo && testStatus === 'done' && (
           <div className="space-y-2">
-            <h3 className="text-sm text-slate-200 font-semibold">测试结果</h3>
+            <h3 className="text-sm text-slate-200 font-semibold">
+              测试结果 {progressLabel}
+            </h3>
+            {testProgress.total === 0 && (
+              <div className="text-xs text-slate-500">未填写任何 API Key，已跳过测试。</div>
+            )}
             <div className="grid gap-2">
               {testResults.map((result) => {
                 const modelOption = MODEL_OPTIONS[result.type]?.[result.provider]?.find(

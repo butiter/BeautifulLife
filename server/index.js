@@ -1021,6 +1021,19 @@ const testTextModel = async ({ provider, apiKey, model }) => {
   throw new Error(`Unsupported provider: ${provider}`);
 };
 
+const getImageTestSize = (provider) =>
+  provider === 'qwen' ? '1024*1024' : provider === 'doubao' ? '2K' : '1024x1024';
+
+const runSingleModelTest = async ({ provider, apiKey, model, type }) => {
+  if (!apiKey) throw new Error('Missing API key');
+  if (type === 'image') {
+    const size = getImageTestSize(provider);
+    await callImageModel({ provider, apiKey, model, prompt: '测试图片', size });
+    return;
+  }
+  await testTextModel({ provider, apiKey, model });
+};
+
 const runModelTests = async ({ providers }) => {
   const results = [];
   const providerIds = Object.keys(providers || {});
@@ -1047,7 +1060,7 @@ const runModelTests = async ({ providers }) => {
     const imageModels = MODEL_CATALOG.image[provider] || [];
     for (const model of imageModels) {
       try {
-        const size = provider === 'qwen' ? '1024*1024' : provider === 'doubao' ? '2K' : '1024x1024';
+        const size = getImageTestSize(provider);
         await callImageModel({ provider, apiKey, model, prompt: '测试图片', size });
         results.push({ provider, model, type: 'image', ok: true });
       } catch (error) {
@@ -1076,6 +1089,27 @@ app.post('/api/settings/test', async (req, res) => {
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     res.status(500).json({ ok: false, error: message });
+  }
+});
+
+app.post('/api/settings/test-item', async (req, res) => {
+  const { provider, model, type, providers = {} } = req.body || {};
+  if (!provider || !model || !type) {
+    return res.status(400).json({ ok: false, error: 'Missing test parameters.' });
+  }
+  const apiKey = getProviderApiKey(provider, { providers });
+  if (!apiKey) {
+    return res.json({
+      ok: true,
+      result: { provider, model, type, ok: false, message: 'Missing API key' }
+    });
+  }
+  try {
+    await runSingleModelTest({ provider, apiKey, model, type });
+    return res.json({ ok: true, result: { provider, model, type, ok: true } });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return res.json({ ok: true, result: { provider, model, type, ok: false, message } });
   }
 });
 
