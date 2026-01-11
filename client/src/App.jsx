@@ -96,9 +96,9 @@ const buildDefaultModelSettings = () => ({
     qwen: { apiKey: '' }
   },
   selections: {
-    textLow: { provider: 'openai', model: MODEL_OPTIONS.textLow.openai[0].id },
-    textHigh: { provider: 'openai', model: MODEL_OPTIONS.textHigh.openai[0].id },
-    image: { provider: 'openai', model: MODEL_OPTIONS.image.openai[0].id }
+    textLow: { provider: 'doubao', model: MODEL_OPTIONS.textLow.doubao[0].id },
+    textHigh: { provider: 'doubao', model: MODEL_OPTIONS.textHigh.doubao[0].id },
+    image: { provider: 'doubao', model: MODEL_OPTIONS.image.doubao[0].id }
   }
 });
 
@@ -462,14 +462,22 @@ const LogView = () => {
 const SettingsView = ({ modelSettings, onSave }) => {
   const [draft, setDraft] = useState(() => normalizeModelSettings(modelSettings));
   const [isApiModalOpen, setIsApiModalOpen] = useState(false);
+  const [isModelModalOpen, setIsModelModalOpen] = useState(false);
   const [testStatus, setTestStatus] = useState('idle');
   const [testResults, setTestResults] = useState([]);
   const [testError, setTestError] = useState('');
   const [testProgress, setTestProgress] = useState({ completed: 0, total: 0 });
   const [showTestInfo, setShowTestInfo] = useState(true);
+  const [saveMessage, setSaveMessage] = useState('');
+
+  const currentSettings = useMemo(
+    () => normalizeModelSettings(modelSettings),
+    [modelSettings]
+  );
 
   useEffect(() => {
     setDraft(normalizeModelSettings(modelSettings));
+    setSaveMessage('');
   }, [modelSettings]);
 
   const updateSelection = (key, updates) => {
@@ -494,6 +502,7 @@ const SettingsView = ({ modelSettings, onSave }) => {
     const normalized = normalizeModelSettings(draft);
     setDraft(normalized);
     onSave(normalized);
+    setSaveMessage('保存成功，当前已生效。');
   };
 
   const buildTestQueue = () => {
@@ -604,6 +613,15 @@ const SettingsView = ({ modelSettings, onSave }) => {
         </div>
       </div>
     );
+  };
+
+  const renderCurrentModel = (key) => {
+    const selection = currentSettings.selections[key];
+    const modelOption = MODEL_OPTIONS[key]?.[selection.provider]?.find(
+      (item) => item.id === selection.model
+    );
+    const modelLabel = modelOption?.label || selection.model;
+    return buildModelLabel(selection.provider, modelLabel);
   };
 
   return (
@@ -730,18 +748,46 @@ const SettingsView = ({ modelSettings, onSave }) => {
       </section>
 
       <section className="space-y-6 bg-slate-900/70 border border-slate-800 rounded-xl p-5">
-        <h2 className="text-lg text-cyan-300">模型分配</h2>
-        {renderModelRow('textLow', '低质量文本生成', '用于安全检查与快速推理。')}
-        {renderModelRow('textHigh', '高质量文本生成', '用于世界构建、人物与任务生成。')}
-        {renderModelRow('image', '图像生成', '用于角色头像与地图资产。')}
-        <div className="flex justify-end">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <h2 className="text-lg text-cyan-300">模型分配</h2>
+            <p className="text-xs text-slate-500 mt-1">打开设置时会刷新显示当前生效的模型。</p>
+          </div>
           <button
-            onClick={handleSave}
-            className="px-4 py-2 text-xs uppercase tracking-widest bg-cyan-900 hover:bg-cyan-800 text-cyan-100 rounded-lg border border-cyan-700"
+            type="button"
+            onClick={() => {
+              setDraft(normalizeModelSettings(modelSettings));
+              setIsModelModalOpen(true);
+            }}
+            className="px-4 py-2 text-xs uppercase tracking-widest bg-slate-800 border border-slate-700 rounded-lg text-slate-200 hover:text-white hover:border-cyan-400 transition"
           >
-            保存
+            修改模型
           </button>
         </div>
+
+        <div className="grid gap-3 md:grid-cols-3">
+          <div className="bg-slate-950/60 border border-slate-800 rounded-lg px-3 py-3 text-xs space-y-2">
+            <div className="text-slate-400">低质量文本生成</div>
+            <div className="text-slate-200">{renderCurrentModel('textLow')}</div>
+            <div className="text-slate-500">用于安全检查与快速推理。</div>
+          </div>
+          <div className="bg-slate-950/60 border border-slate-800 rounded-lg px-3 py-3 text-xs space-y-2">
+            <div className="text-slate-400">高质量文本生成</div>
+            <div className="text-slate-200">{renderCurrentModel('textHigh')}</div>
+            <div className="text-slate-500">用于世界构建、人物与任务生成。</div>
+          </div>
+          <div className="bg-slate-950/60 border border-slate-800 rounded-lg px-3 py-3 text-xs space-y-2">
+            <div className="text-slate-400">图像生成</div>
+            <div className="text-slate-200">{renderCurrentModel('image')}</div>
+            <div className="text-slate-500">用于角色头像与地图资产。</div>
+          </div>
+        </div>
+
+        {saveMessage && (
+          <div className="text-xs text-emerald-400 bg-emerald-500/10 border border-emerald-500/40 rounded-lg px-3 py-2">
+            {saveMessage}
+          </div>
+        )}
       </section>
 
       {isApiModalOpen && (
@@ -795,6 +841,50 @@ const SettingsView = ({ modelSettings, onSave }) => {
                 className="px-4 py-2 text-xs uppercase tracking-widest bg-cyan-900 hover:bg-cyan-800 text-cyan-100 rounded-lg border border-cyan-700"
               >
                 保存并测试
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {isModelModalOpen && (
+        <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-6">
+          <div className="bg-slate-900 border border-slate-700 rounded-2xl p-6 w-full max-w-2xl space-y-4 shadow-2xl">
+            <div className="flex items-center justify-between">
+              <h3 className="text-lg text-white font-semibold">修改模型分配</h3>
+              <button
+                onClick={() => {
+                  setDraft(normalizeModelSettings(modelSettings));
+                  setIsModelModalOpen(false);
+                }}
+                className="text-slate-400 hover:text-white"
+              >
+                ✕
+              </button>
+            </div>
+            <div className="space-y-6">
+              {renderModelRow('textLow', '低质量文本生成', '用于安全检查与快速推理。')}
+              {renderModelRow('textHigh', '高质量文本生成', '用于世界构建、人物与任务生成。')}
+              {renderModelRow('image', '图像生成', '用于角色头像与地图资产。')}
+            </div>
+            <div className="flex justify-end gap-3 pt-2">
+              <button
+                onClick={() => {
+                  setDraft(normalizeModelSettings(modelSettings));
+                  setIsModelModalOpen(false);
+                }}
+                className="px-4 py-2 text-xs uppercase tracking-widest bg-slate-800 border border-slate-700 rounded-lg text-slate-200 hover:text-white hover:border-cyan-400 transition"
+              >
+                取消
+              </button>
+              <button
+                onClick={() => {
+                  handleSave();
+                  setIsModelModalOpen(false);
+                }}
+                className="px-4 py-2 text-xs uppercase tracking-widest bg-cyan-900 hover:bg-cyan-800 text-cyan-100 rounded-lg border border-cyan-700"
+              >
+                保存
               </button>
             </div>
           </div>

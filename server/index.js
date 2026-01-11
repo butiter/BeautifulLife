@@ -95,9 +95,9 @@ const MODEL_CATALOG = {
 };
 
 const DEFAULT_MODEL_SELECTIONS = {
-  textLow: { provider: 'openai', model: 'gpt-4.1-nano' },
-  textHigh: { provider: 'openai', model: 'gpt-5.2' },
-  image: { provider: 'openai', model: 'gpt-image-1' }
+  textLow: { provider: 'doubao', model: 'doubao-seed-1-8-251228' },
+  textHigh: { provider: 'doubao', model: 'doubao-seed-1-8-251228' },
+  image: { provider: 'doubao', model: 'doubao-seedream-4-5-251128' }
 };
 
 const getModelSettings = (payload) => {
