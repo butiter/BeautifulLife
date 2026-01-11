@@ -207,9 +207,18 @@ const DebugView = () => {
     <div className="min-h-screen bg-slate-950 text-slate-200 p-8 space-y-10">
       <div className="flex items-center justify-between">
         <h1 className="text-3xl font-semibold text-white">Genesis Debug Console</h1>
-        <a href="/" className="text-cyan-400 text-sm">
-          返回游戏
-        </a>
+        <div className="flex items-center gap-3">
+          <button
+            type="button"
+            onClick={() => window.open('/?forceGame=1', '_blank', 'noopener')}
+            className="px-3 py-2 text-xs uppercase tracking-widest bg-slate-800 border border-slate-700 rounded-lg text-slate-200 hover:text-white hover:border-cyan-400 transition"
+          >
+            新窗口打开游戏
+          </button>
+          <a href="/" className="text-cyan-400 text-sm">
+            返回游戏
+          </a>
+        </div>
       </div>
 
       <section className="space-y-3 bg-slate-900/70 border border-slate-800 rounded-xl p-4">
@@ -402,6 +411,57 @@ export default function App() {
 
   const scrollRef = useRef(null);
 
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    if (params.get('forceGame') !== '1') return;
+    const stored = localStorage.getItem('genesisSession');
+    if (!stored) return;
+    try {
+      const session = JSON.parse(stored);
+      if (!session?.character || !session?.world) return;
+      setPlayerInput(session.playerInput || null);
+      setWorldBuilder(session.worldBuilder || null);
+      setMultiAgent(session.multiAgent || null);
+      setAssets(session.assets || null);
+      setCharacter(session.character || null);
+      setWorld(session.world || null);
+      setTaskLine(session.taskLine || []);
+      setQuestLog(session.questLog || []);
+      setCurrentOptions(session.currentOptions || []);
+      setPhase('GAME');
+    } catch (error) {
+      console.error('Failed to restore game session', error);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (phase !== 'GAME') return;
+    if (!character || !world) return;
+    const snapshot = {
+      playerInput,
+      worldBuilder,
+      multiAgent,
+      assets,
+      character,
+      world,
+      taskLine,
+      questLog,
+      currentOptions
+    };
+    localStorage.setItem('genesisSession', JSON.stringify(snapshot));
+  }, [
+    phase,
+    playerInput,
+    worldBuilder,
+    multiAgent,
+    assets,
+    character,
+    world,
+    taskLine,
+    questLog,
+    currentOptions
+  ]);
+
   const buildHeaders = () => {
     const headers = { 'Content-Type': 'application/json' };
     const storedKey = localStorage.getItem('openaiApiKey');
@@ -501,6 +561,24 @@ export default function App() {
       { type: 'system', text: buildData.firstQuest?.text }
     ]);
     setCurrentOptions(buildData.firstQuest?.options || []);
+
+    localStorage.setItem(
+      'genesisSession',
+      JSON.stringify({
+        playerInput: buildData.playerInput,
+        worldBuilder: buildData.worldBuilder,
+        multiAgent: buildData.multiAgent,
+        assets: buildData.assets,
+        character: buildData.character,
+        world: buildData.world,
+        taskLine: buildData.taskLine || [],
+        questLog: [
+          { type: 'narrator', text: buildData.multiAgent?.narrator?.origin_story },
+          { type: 'system', text: buildData.firstQuest?.text }
+        ],
+        currentOptions: buildData.firstQuest?.options || []
+      })
+    );
 
     localStorage.setItem(
       'genesisDebug',

@@ -76,6 +76,18 @@ const addLlmLog = (entry) => {
   }
 };
 
+const addImageErrorLog = ({ prompt, size, error }) => {
+  const message = error instanceof Error ? error.message : String(error);
+  addLlmLog({
+    id: nanoid(8),
+    createdAt: new Date().toISOString(),
+    model: IMAGE_MODEL,
+    input: { tag: 'image_generation', prompt, size },
+    output: `ERROR: ${message}`,
+    error: true
+  });
+};
+
 const normalizeStatus = (value, allowed, fallback = 'fail') =>
   allowed.includes(value) ? value : fallback;
 
@@ -601,11 +613,19 @@ const buildAssets = async (worldBuilder, apiKey) => {
     .map((node) => node.name)
     .join('、');
   const mapPrompt = `世界地图：包含${mapPlaces}等地点，适度标注文字说明。风格关键词：${worldBuilder.pic_style.join('，')}。简洁清晰、易读。`;
+  const imageSize = '1024x1024';
 
   const [avatarResult, mapResult] = await Promise.allSettled([
-    callImageModel({ apiKey, prompt: avatarPrompt, size: '1024x1024' }),
-    callImageModel({ apiKey, prompt: mapPrompt, size: '1024x1024' })
+    callImageModel({ apiKey, prompt: avatarPrompt, size: imageSize }),
+    callImageModel({ apiKey, prompt: mapPrompt, size: imageSize })
   ]);
+
+  if (avatarResult.status === 'rejected') {
+    addImageErrorLog({ prompt: avatarPrompt, size: imageSize, error: avatarResult.reason });
+  }
+  if (mapResult.status === 'rejected') {
+    addImageErrorLog({ prompt: mapPrompt, size: imageSize, error: mapResult.reason });
+  }
 
   const avatarImage =
     avatarResult.status === 'fulfilled'
