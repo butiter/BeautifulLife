@@ -427,7 +427,7 @@ export default function App() {
     setGenesisChecks(buildGenesisChecks());
     setGenesisError('');
 
-    const response = await fetch(`${API_BASE}/api/genesis`, {
+    const response = await fetch(`${API_BASE}/api/genesis/checks`, {
       method: 'POST',
       headers: buildHeaders(),
       body: JSON.stringify(worldSettings)
@@ -470,25 +470,44 @@ export default function App() {
       return;
     }
 
-    setPlayerInput(data.playerInput);
-    setWorldBuilder(data.worldBuilder);
-    setMultiAgent(data.multiAgent);
-    setAssets(data.assets);
-    setCharacter(data.character);
-    setWorld(data.world);
-    setTaskLine(data.taskLine || []);
+    setPhase('GENESIS_LOADING');
+
+    const buildResponse = await fetch(`${API_BASE}/api/genesis/build`, {
+      method: 'POST',
+      headers: buildHeaders(),
+      body: JSON.stringify({
+        settings: worldSettings,
+        sanitizedInput: data.sanitizedInput || {},
+        worldDesc: worldSettings.worldDesc,
+        charDesc: worldSettings.charDesc
+      })
+    });
+    const buildData = await buildResponse.json();
+
+    if (!buildData.ok) {
+      setGenesisError(buildData.error || '创世纪生成失败，请稍后重试。');
+      return;
+    }
+
+    setPlayerInput(buildData.playerInput);
+    setWorldBuilder(buildData.worldBuilder);
+    setMultiAgent(buildData.multiAgent);
+    setAssets(buildData.assets);
+    setCharacter(buildData.character);
+    setWorld(buildData.world);
+    setTaskLine(buildData.taskLine || []);
     setQuestLog([
-      { type: 'narrator', text: data.multiAgent?.narrator?.origin_story },
-      { type: 'system', text: data.firstQuest?.text }
+      { type: 'narrator', text: buildData.multiAgent?.narrator?.origin_story },
+      { type: 'system', text: buildData.firstQuest?.text }
     ]);
-    setCurrentOptions(data.firstQuest?.options || []);
+    setCurrentOptions(buildData.firstQuest?.options || []);
 
     localStorage.setItem(
       'genesisDebug',
       JSON.stringify({
-        worldBuilder: data.worldBuilder,
-        multiAgent: data.multiAgent,
-        assets: data.assets
+        worldBuilder: buildData.worldBuilder,
+        multiAgent: buildData.multiAgent,
+        assets: buildData.assets
       })
     );
 
@@ -635,6 +654,31 @@ export default function App() {
           <div className="bg-rose-500/10 border border-rose-500/40 text-rose-200 rounded-xl p-4 text-sm">
             {genesisError}
             <div className="mt-4 flex justify-end">
+              <button
+                onClick={() => setPhase('SETUP')}
+                className="px-4 py-2 text-xs uppercase tracking-widest bg-slate-800 border border-slate-700 rounded-lg text-slate-200 hover:text-white hover:border-cyan-400 transition"
+              >
+                返回调整
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+
+  const renderGenesisLoading = () => (
+    <div className="min-h-screen bg-black flex flex-col items-center justify-center p-8 relative overflow-hidden">
+      <div className="absolute inset-0 opacity-60 bg-[radial-gradient(circle_at_center,rgba(15,23,42,0.35),rgba(0,0,0,0.95))]" />
+      <div className="relative z-10 flex flex-col items-center gap-6 text-center">
+        <div className="genesis-title text-4xl md:text-5xl tracking-[0.4em] font-semibold">
+          创世纪
+        </div>
+        <p className="text-xs uppercase tracking-[0.35em] text-slate-500">Genesis Loading</p>
+        {genesisError && (
+          <div className="bg-rose-500/10 border border-rose-500/40 text-rose-200 rounded-xl p-4 text-sm max-w-md">
+            {genesisError}
+            <div className="mt-4 flex justify-center">
               <button
                 onClick={() => setPhase('SETUP')}
                 className="px-4 py-2 text-xs uppercase tracking-widest bg-slate-800 border border-slate-700 rounded-lg text-slate-200 hover:text-white hover:border-cyan-400 transition"
@@ -868,6 +912,7 @@ export default function App() {
     <>
       {phase === 'SETUP' && renderSetup()}
       {phase === 'GENESIS' && renderGenesis()}
+      {phase === 'GENESIS_LOADING' && renderGenesisLoading()}
       {phase === 'GAME' && character && world && renderGame()}
     </>
   );
