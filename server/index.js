@@ -64,35 +64,30 @@ const PROVIDER_BASE_URLS = {
   openai: 'https://api.openai.com/v1',
   doubao: 'https://ark.cn-beijing.volces.com/api/v3',
   deepseek: 'https://api.deepseek.com/v1',
-  qwenText: 'https://dashscope-intl.aliyuncs.com/compatible-mode/v1',
-  qwenImage: 'https://dashscope-intl.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation'
+  qwenText: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
+  qwenImage: 'https://dashscope.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation'
 };
 
 const MODEL_CATALOG = {
   textLow: {
     doubao: [
-      'doubao-seed-1.8',
-      'doubao-seed-1.6-lite',
-      'doubao-seed-1.6-flash',
-      'doubao-1.5-pro-32k',
-      'doubao-1.5-lite-32k'
+      'doubao-seed-1-8-251228',
+      'doubao-seed-1-6-flash-250828'
     ],
     qwen: ['qwen-mt-lite', 'qwen-flash', 'qwen-mt-plus'],
     deepseek: ['deepseek-chat'],
-    openai: ['gpt-4.1-nano', 'gpt-5-nano', 'gpt-5.2-nano']
+    openai: ['gpt-4.1-nano', 'gpt-5-nano', 'gpt-5-mini']
   },
   textHigh: {
-    doubao: ['doubao-seed-1.8', 'doubao-1.5-pro-32k'],
+    doubao: ['doubao-seed-1-8-251228', 'doubao-seed-1-6-lite-251015'],
     qwen: ['qwen3-max', 'qwen-plus'],
     deepseek: ['deepseek-chat', 'deepseek-reasoner'],
-    openai: ['gpt-4.1-mini', 'gpt-5-mini', 'gpt-5.2-mini', 'gpt-5.2']
+    openai: ['gpt-4.1-mini', 'gpt-5-mini', 'gpt-5.2']
   },
   image: {
     doubao: [
-      'doubao-seedream-4.5',
-      'doubao-seedream-4.0',
-      'doubao-seedream-3.0-t2i',
-      'doubao-seededit-3.0-i2i'
+      'doubao-seedream-4-5-251128',
+      'doubao-seedream-4-0-250828'
     ],
     qwen: ['qwen-image-plus', 'qwen-image'],
     openai: ['gpt-image-1-mini', 'gpt-image-1', 'gpt-image-1.5', 'gpt-5', 'gpt-5-mini']
@@ -1052,7 +1047,7 @@ const runModelTests = async ({ providers }) => {
     const imageModels = MODEL_CATALOG.image[provider] || [];
     for (const model of imageModels) {
       try {
-        const size = provider === 'qwen' ? '512*512' : provider === 'doubao' ? '2K' : '512x512';
+        const size = provider === 'qwen' ? '1024*1024' : provider === 'doubao' ? '2K' : '1024x1024';
         await callImageModel({ provider, apiKey, model, prompt: '测试图片', size });
         results.push({ provider, model, type: 'image', ok: true });
       } catch (error) {

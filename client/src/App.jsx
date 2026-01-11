@@ -21,7 +21,7 @@ const PROVIDERS = {
   doubao: { label: '豆包', supports: ['text', 'image'] },
   openai: { label: 'OPENAI', supports: ['text', 'image'] },
   deepseek: { label: 'Deepseek', supports: ['text'] },
-  qwen: { label: 'QWEN', supports: ['text', 'image'] }
+  qwen: { label: 'QWEN(海内版)', supports: ['text', 'image'] }
 };
 
 const MODEL_OPTIONS = {
