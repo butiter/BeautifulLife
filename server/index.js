@@ -464,26 +464,34 @@ const runPromptChecks = async ({ worldDescRaw, charDescRaw, apiKey, provider, mo
       apiKey,
       model,
       provider,
-      systemPrompt: `你是内容审核与创世纪输入审查员。请仅输出 JSON 对象，不要输出任何多余文字。
+      systemPrompt: `你是创世纪输入审查与整理员。你的核心目标是审核玩家输入，并将玩家输入过滤为安全的版本。
+      请仅输出 JSON 对象，不要输出任何多余文字。
+      我将会给你两段文本，分别是用户的世界描述输入和用户的角色描述输入。
+      你需要完成四项检查并给出新的过滤后的世界观描述/角色描述：
+        1) safety：若包含攻击/入侵/绕过/漏洞/脚本注入等黑客内容，或政治/色情/赌博/恐怖/毒品/枪支/邪教/极端等敏感主题，则 fail；否则 pass。
+        2) utility：若世界观描述与角色描述足够明确、可用于生成故事，则 pass；否则 fail。
+        3) expansion：若包含数值化属性、强指向性任务/目标/必须完成的指令等，应标记 warn；否则 pass。
+        4) builder：若输入足以直接进入世界构建（无需继续追问），则 pass；否则 fail。
+        同时返回 sanitizedInput。sanitizedInput是过滤后的世界描述与角色描述（而不是审查结果）。
+        你需要在保留用户意图的前提下，移除攻击/敏感内容与过强指令化表述，必要时简化数值化词汇，也可以简单扩展。
+      输出的 JSON 结构必须为（下面只展示结构示例，value 只是占位，禁止照抄！！！！！！！）：  
+      {
+        "checks": {
+          "safety":   { "status": "pass|fail", "message": "这里填安全性判定说明" },
+          "utility":  { "status": "pass|fail", "message": "这里填效用判定说明" },
+          "expansion":{ "status": "pass|warn", "message": "这里填扩展性判定说明" },
+          "builder":  { "status": "pass|fail", "message": "这里填是否可直接构建的说明" }
+        },
+        "sanitizedInput": {
+          "worldDesc": "<根据用户 worldDesc 清理后的世界描述>",
+          "charDesc":  "<根据用户 charDesc 清理后的角色描述>"
+        }
+      }
 
-需要完成四项检查并给出简短中文说明：
-1) safety：若包含攻击/入侵/绕过/漏洞/脚本注入等黑客内容，或政治/色情/赌博/恐怖/毒品/枪支/邪教/极端等敏感主题，则 fail；否则 pass。
-2) utility：若世界观描述与角色描述足够明确、可用于生成故事，则 pass；否则 fail。
-3) expansion：若包含数值化属性、强指向性任务/目标/必须完成的指令等，应标记 warn；否则 pass。
-4) builder：若输入足以直接进入世界构建（无需继续追问），则 pass；否则 fail。
-
-同时返回 sanitizedInput：在保留用户意图的前提下，移除攻击/敏感内容与过强指令化表述，必要时简化数值化词汇。
-
-输出 JSON 结构：
-{
-  "checks": {
-    "safety": { "status": "pass|fail", "message": "..." },
-    "utility": { "status": "pass|fail", "message": "..." },
-    "expansion": { "status": "pass|warn", "message": "..." },
-    "builder": { "status": "pass|fail", "message": "..." }
-  },
-  "sanitizedInput": { "worldDesc": "...", "charDesc": "..." }
-}`,
+      注意：
+      1. 你必须根据用户输入实际生成 sanitizedInput.worldDesc / sanitizedInput.charDesc。
+      2. 不允许原样返回示例里的占位字符串（例如以“这里填……”或带尖括号 <> 的内容）。
+`,
       userPayload: {
         worldDesc: worldDescRaw,
         charDesc: charDescRaw
