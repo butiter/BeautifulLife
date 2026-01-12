@@ -847,6 +847,84 @@ const generateTaskGene = async ({ apiKey, input, provider, model }) => {
   });
 };
 
+const runInputCheck = async ({ apiKey, input, provider, model }) => {
+  const systemPrompt = `你是 InputCheckAgent。只输出 JSON，不要输出任何多余文字。
+你需要审查玩家输入的行动描述，并执行以下规则：
+1) 合规性检查：如果包含明确违法、仇恨、成人露骨内容或其他违规内容，设置 pass=false，并给出 error_message。
+2) 动作/结果分离：如果文本包含行动结果（例如“我挥剑砍死了哥布林”），必须删除结果，仅保留动作。
+3) 清洗提示：如果发生了结果删除，warning_message 写明“结果由系统判定，已提取你的动作”，否则为 null。
+
+输出 JSON 结构必须为：
+{
+  "pass": true/false,
+  "cleaned_action": "清洗后的动作文字",
+  "warning_message": "提示语或 null",
+  "error_message": "违规原因或 null"
+}`;
+
+  return callJsonModel({
+    apiKey,
+    model,
+    provider,
+    systemPrompt,
+    userPayload: { action: input },
+    logTag: 'input_check'
+  });
+};
+
+const runDeduction = async ({
+  apiKey,
+  provider,
+  model,
+  world_desp_and_user_desp,
+  goal,
+  task_desp,
+  task_detail,
+  action_history,
+  current_action
+}) => {
+  const systemPrompt = `你是 DeductionAgent。只输出 JSON，不要输出任何多余文字。
+你负责根据世界观、任务目标、历史行动来推演玩家当前行动的直接结果。
+
+输出 JSON 结构必须为：
+{
+  "is_completed": 1 或 0,
+  "result_description": "行动造成的直接结果描述",
+  "next_possible_actions": ["建议行动1", "建议行动2"]
+}
+要求：
+- result_description 必须简洁、具体、只描述本次行动的结果。
+- next_possible_actions 必须提供 2 个建议。
+- is_completed 仅在任务达成时为 1，否则为 0。`;
+
+  return callJsonModel({
+    apiKey,
+    model,
+    provider,
+    systemPrompt,
+    userPayload: {
+      world_desp_and_user_desp,
+      goal,
+      task_desp,
+      task_detail,
+      action_history,
+      current_action
+    },
+    logTag: 'deduction'
+  });
+};
+
+const normalizeNextActions = (actions) => {
+  const safeActions = Array.isArray(actions)
+    ? actions.map((action) => String(action || '').trim()).filter(Boolean).slice(0, 2)
+    : [];
+  const fallback = ['观察周遭动静', '重新评估下一步行动'];
+  while (safeActions.length < 2) {
+    safeActions.push(fallback[safeActions.length]);
+  }
+  return safeActions;
+};
+
 const normalizeStats = (stats, fallback) => {
   const base = { ...fallback };
   if (!stats || typeof stats !== 'object') return base;
@@ -1333,6 +1411,85 @@ app.post('/api/task-gene', async (req, res) => {
     const message = error instanceof Error ? error.message : String(error);
     addProcessLog('任务推演失败', { error: message });
     return res.status(502).json({ ok: false, error: `任务推演失败：${message}` });
+  }
+});
+
+app.post('/api/input-check', async (req, res) => {
+  const payload = req.body || {};
+  const action = payload.action?.trim();
+  if (!action) {
+    return res.status(400).json({ ok: false, error: '动作不能为空。' });
+  }
+
+  const modelSettings = payload.modelSettings || {};
+  const resolvedSettings = getModelSettings({ modelSettings });
+  const lowQuality = resolvedSettings.selections.textLow;
+  const apiKey = getProviderApiKey(lowQuality.provider, resolvedSettings);
+
+  if (!apiKey) {
+    return res.status(400).json({ ok: false, error: '缺少低质量文本生成 API Key。' });
+  }
+
+  try {
+    const result = await runInputCheck({
+      apiKey,
+      input: action,
+      provider: lowQuality.provider,
+      model: lowQuality.model
+    });
+
+    if (result?.pass === false) {
+      return res
+        .status(400)
+        .json({ ok: false, pass: false, error: result?.error_message || '输入包含违规内容。' });
+    }
+
+    return res.json({
+      ok: true,
+      pass: true,
+      cleaned_action: result?.cleaned_action || action,
+      warning_message: result?.warning_message || null
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return res.status(502).json({ ok: false, error: `输入审查失败：${message}` });
+  }
+});
+
+app.post('/api/deduction', async (req, res) => {
+  const payload = req.body || {};
+  const modelSettings = payload.modelSettings || {};
+  const resolvedSettings = getModelSettings({ modelSettings });
+  const lowQuality = resolvedSettings.selections.textLow;
+  const apiKey = getProviderApiKey(lowQuality.provider, resolvedSettings);
+
+  if (!apiKey) {
+    return res.status(400).json({ ok: false, error: '缺少低质量文本生成 API Key。' });
+  }
+
+  try {
+    const result = await runDeduction({
+      apiKey,
+      provider: lowQuality.provider,
+      model: lowQuality.model,
+      world_desp_and_user_desp: payload.world_desp_and_user_desp,
+      goal: payload.goal,
+      task_desp: payload.task_desp,
+      task_detail: payload.task_detail,
+      action_history: Array.isArray(payload.action_history) ? payload.action_history : [],
+      current_action: payload.current_action
+    });
+
+    const normalized = {
+      is_completed: Number(result?.is_completed) === 1 ? 1 : 0,
+      result_description: result?.result_description || '行动产生了新的变化。',
+      next_possible_actions: normalizeNextActions(result?.next_possible_actions)
+    };
+
+    return res.json({ ok: true, result: normalized });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return res.status(502).json({ ok: false, error: `推演失败：${message}` });
   }
 });
 

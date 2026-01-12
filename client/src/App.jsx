@@ -950,10 +950,13 @@ export default function App() {
   const [questLog, setQuestLog] = useState([]);
   const [currentOptions, setCurrentOptions] = useState([]);
   const [taskGene, setTaskGene] = useState(null);
+  const [actionHistory, setActionHistory] = useState([]);
   const [isTaskGeneLoading, setIsTaskGeneLoading] = useState(false);
   const [isLoadingTurn, setIsLoadingTurn] = useState(false);
+  const [isTaskCompleted, setIsTaskCompleted] = useState(false);
   const [isMapOpen, setIsMapOpen] = useState(false);
   const [customInput, setCustomInput] = useState('');
+  const [toastMessage, setToastMessage] = useState('');
   const [saveId, setSaveId] = useState('');
   const [saveStatus, setSaveStatus] = useState('idle');
   const [genesisChecks, setGenesisChecks] = useState(buildGenesisChecks());
@@ -963,6 +966,7 @@ export default function App() {
   const [worldBuilder, setWorldBuilder] = useState(null);
   const [multiAgent, setMultiAgent] = useState(null);
   const [assets, setAssets] = useState(null);
+  const [currentTaskIndex, setCurrentTaskIndex] = useState(0);
   const [modelSettings, setModelSettings] = useState(() => {
     const stored = localStorage.getItem('genesisModelSettings');
     if (!stored) return buildDefaultModelSettings();
@@ -994,6 +998,9 @@ export default function App() {
       setQuestLog(session.questLog || []);
       setCurrentOptions(session.currentOptions || []);
       setTaskGene(session.taskGene || null);
+      setActionHistory(session.actionHistory || []);
+      setIsTaskCompleted(session.isTaskCompleted || false);
+      setCurrentTaskIndex(session.currentTaskIndex || 0);
       setIsTaskGeneLoading(false);
       setPhase('GAME');
     } catch (error) {
@@ -1014,7 +1021,10 @@ export default function App() {
       taskLine,
       questLog,
       currentOptions,
-      taskGene
+      taskGene,
+      actionHistory,
+      isTaskCompleted,
+      currentTaskIndex
     };
     localStorage.setItem('genesisSession', JSON.stringify(snapshot));
   }, [
@@ -1028,7 +1038,10 @@ export default function App() {
     taskLine,
     questLog,
     currentOptions,
-    taskGene
+    taskGene,
+    actionHistory,
+    isTaskCompleted,
+    currentTaskIndex
   ]);
 
   useEffect(() => {
@@ -1064,6 +1077,7 @@ export default function App() {
       const data = await response.json();
       if (data.ok && data.taskGene) {
         setTaskGene(data.taskGene);
+        setIsTaskCompleted(false);
         const options = [
           data.taskGene.firs_opt,
           data.taskGene.seco_opt,
@@ -1084,6 +1098,12 @@ export default function App() {
     }
   }, [questLog, isLoadingTurn]);
 
+  useEffect(() => {
+    if (!toastMessage) return;
+    const timer = window.setTimeout(() => setToastMessage(''), 2400);
+    return () => window.clearTimeout(timer);
+  }, [toastMessage]);
+
   const avatarGradient = useMemo(() => {
     if (!character?.avatarSeed) return avatarGradients[0];
     return avatarGradients[character.avatarSeed % avatarGradients.length];
@@ -1094,6 +1114,9 @@ export default function App() {
     setGenesisChecks(buildGenesisChecks());
     setGenesisError('');
     setGenesisProgress('');
+    setActionHistory([]);
+    setIsTaskCompleted(false);
+    setCurrentTaskIndex(0);
 
     const response = await fetch(`${API_BASE}/api/genesis/checks`, {
       method: 'POST',
@@ -1174,6 +1197,9 @@ export default function App() {
     setQuestLog([{ type: 'narrator', text: buildData.multiAgent?.narrator?.origin_story }]);
     setCurrentOptions([]);
     setTaskGene(null);
+    setActionHistory([]);
+    setIsTaskCompleted(false);
+    setCurrentTaskIndex(0);
 
     localStorage.setItem(
       'genesisSession',
@@ -1187,7 +1213,10 @@ export default function App() {
         taskLine: buildData.taskLine || [],
         questLog: [{ type: 'narrator', text: buildData.multiAgent?.narrator?.origin_story }],
         currentOptions: [],
-        taskGene: null
+        taskGene: null,
+        actionHistory: [],
+        isTaskCompleted: false,
+        currentTaskIndex: 0
       })
     );
 
@@ -1215,33 +1244,106 @@ export default function App() {
     });
   };
 
-  const handleAction = async (actionText) => {
-    setQuestLog((prev) => [...prev, { type: 'player', text: actionText }]);
-    setCustomInput('');
+  const handleAction = async (actionText, { source = 'preset' } = {}) => {
+    const trimmed = actionText?.trim();
+    if (!trimmed || !taskGene || isLoadingTurn) return;
+
     setIsLoadingTurn(true);
+    let currentAction = trimmed;
 
-    const response = await fetch(`${API_BASE}/api/turn`, {
-      method: 'POST',
-      headers: buildHeaders(),
-      body: JSON.stringify({ action: actionText, stats: character.stats })
-    });
-    const result = await response.json();
+    try {
+      if (source === 'custom') {
+        const checkResponse = await fetch(`${API_BASE}/api/input-check`, {
+          method: 'POST',
+          headers: buildHeaders(),
+          body: JSON.stringify({ action: trimmed, modelSettings })
+        });
+        const checkResult = await checkResponse.json();
+        if (!checkResponse.ok || !checkResult.ok) {
+          setQuestLog((prev) => [
+            ...prev,
+            { type: 'system', text: checkResult.error || '输入审查失败，请重试。' }
+          ]);
+          return;
+        }
 
-    setQuestLog((prev) => [...prev, { type: 'narrator', text: result.narrative }]);
-    setCurrentOptions(result.newOptions);
-    setCharacter((prev) => ({
-      ...prev,
-      stats: { ...prev.stats, ...result.statUpdates }
-    }));
+        currentAction = checkResult.cleaned_action || trimmed;
+        if (checkResult.warning_message) {
+          setToastMessage(checkResult.warning_message);
+        }
+      }
 
-    if (result.mapUnlock) {
-      setWorld((prev) => ({
+      setQuestLog((prev) => [...prev, { type: 'player', text: currentAction }]);
+      setCustomInput('');
+
+      const response = await fetch(`${API_BASE}/api/deduction`, {
+        method: 'POST',
+        headers: buildHeaders(),
+        body: JSON.stringify({
+          world_desp_and_user_desp: taskGene.world_desp_and_user_desp,
+          goal: taskGene.goal,
+          task_desp: taskGene.task_desp,
+          task_detail: taskGene.task_detail,
+          action_history: actionHistory,
+          current_action: currentAction,
+          modelSettings
+        })
+      });
+      const result = await response.json();
+
+      if (!response.ok || !result.ok) {
+        setQuestLog((prev) => [
+          ...prev,
+          { type: 'system', text: result.error || '推演失败，请重试。' }
+        ]);
+        return;
+      }
+
+      const deduction = result.result;
+      setQuestLog((prev) => [...prev, { type: 'narrator', text: deduction.result_description }]);
+
+      if (deduction.is_completed === 1) {
+        setIsTaskCompleted(true);
+        setCurrentOptions([]);
+        triggerNextTask();
+        return;
+      }
+
+      setActionHistory((prev) => [
         ...prev,
-        mapNodes: [...prev.mapNodes, result.mapUnlock]
-      }));
+        { action: currentAction, result: deduction.result_description }
+      ]);
+      setCurrentOptions(deduction.next_possible_actions);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : '推演失败，请稍后重试。';
+      setQuestLog((prev) => [...prev, { type: 'system', text: message }]);
+    } finally {
+      setIsLoadingTurn(false);
+    }
+  };
+
+  const triggerNextTask = () => {
+    const nextIndex = currentTaskIndex + 1;
+    const nextSummary = taskLine?.[nextIndex];
+    if (!nextSummary || !worldBuilder || !multiAgent) {
+      setQuestLog((prev) => [
+        ...prev,
+        { type: 'system', text: '当前任务线已完成，等待新的任务生成。' }
+      ]);
+      return;
     }
 
-    setIsLoadingTurn(false);
+    setActionHistory([]);
+    setCurrentOptions([]);
+    setTaskGene(null);
+    setIsTaskCompleted(false);
+    setCurrentTaskIndex(nextIndex);
+    requestTaskGene({
+      worldSetting: worldBuilder.world_setting,
+      originStory: multiAgent.narrator?.origin_story,
+      powerLevel: worldBuilder.Power_level,
+      taskDesp: nextSummary
+    });
   };
 
   const handleSave = async () => {
@@ -1260,7 +1362,10 @@ export default function App() {
         worldBuilder,
         multiAgent,
         assets,
-        taskGene
+        taskGene,
+        actionHistory,
+        isTaskCompleted,
+        currentTaskIndex
       })
     });
 
@@ -1541,6 +1646,13 @@ export default function App() {
           </section>
 
           <section className="space-y-6">
+            {isTaskCompleted && (
+              <div className="flex justify-center animate-fade-in">
+                <div className="px-6 py-3 rounded-full bg-emerald-500/10 border border-emerald-400/60 text-emerald-200 text-sm tracking-widest shadow-[0_0_24px_rgba(16,185,129,0.2)]">
+                  任务完成
+                </div>
+              </div>
+            )}
             {questLog.map((log, index) => (
               <div
                 key={`${log.type}-${index}`}
@@ -1561,8 +1673,9 @@ export default function App() {
             ))}
 
             {isLoadingTurn && (
-              <div className="flex justify-start animate-pulse pl-6">
-                <span className="text-cyan-400 text-sm">AI 正在推演世界线变动...</span>
+              <div className="flex justify-start animate-pulse pl-6 items-center gap-2">
+                <Spinner />
+                <span className="text-cyan-400 text-sm">系统思考中...</span>
               </div>
             )}
           </section>
@@ -1574,8 +1687,8 @@ export default function App() {
               (opt, i) => (
                 <button
                   key={`${opt}-${i}`}
-                  onClick={() => handleAction(opt)}
-                  disabled={isLoadingTurn || (isTaskGeneLoading && !taskGene)}
+                  onClick={() => handleAction(opt, { source: 'preset' })}
+                  disabled={isLoadingTurn || isTaskCompleted || (isTaskGeneLoading && !taskGene) || !taskGene}
                   className="p-3 text-sm text-left bg-slate-800 hover:bg-slate-700 hover:border-cyan-400 border border-slate-700 rounded-lg transition-all duration-200 text-slate-300 disabled:opacity-50"
                 >
                   {i + 1}. {opt}
@@ -1589,14 +1702,18 @@ export default function App() {
               type="text"
               value={customInput}
               onChange={(e) => setCustomInput(e.target.value)}
-              onKeyDown={(e) => e.key === 'Enter' && customInput && handleAction(customInput)}
+              onKeyDown={(e) =>
+                e.key === 'Enter' &&
+                customInput &&
+                handleAction(customInput, { source: 'custom' })
+              }
               placeholder="或者输入你自己的行动..."
-              disabled={isLoadingTurn}
+              disabled={isLoadingTurn || isTaskCompleted || !taskGene}
               className="flex-1 bg-black/40 border border-slate-700 rounded-lg px-4 text-white focus:border-cyan-500 focus:outline-none focus:ring-1 focus:ring-cyan-500"
             />
             <button
-              onClick={() => customInput && handleAction(customInput)}
-              disabled={isLoadingTurn || !customInput}
+              onClick={() => customInput && handleAction(customInput, { source: 'custom' })}
+              disabled={isLoadingTurn || isTaskCompleted || !customInput || !taskGene}
               className="px-6 bg-cyan-600 hover:bg-cyan-500 text-white rounded-lg disabled:opacity-50 disabled:bg-slate-700 transition-colors"
             >
               <Send size={18} />
@@ -1621,6 +1738,12 @@ export default function App() {
           mapImage={assets?.map?.image}
           worldSetting={worldBuilder?.world_setting}
         />
+      )}
+
+      {toastMessage && (
+        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 bg-slate-900/90 border border-cyan-500/40 text-cyan-100 text-sm px-4 py-2 rounded-full shadow-lg animate-fade-in">
+          {toastMessage}
+        </div>
       )}
     </div>
   );
