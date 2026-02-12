@@ -1,87 +1,99 @@
 # BeautifulLife
 
-一个轻量短周期跑团 Web 游戏 demo（含前后端）。玩家可以选择世界属性、填写世界与角色描述，然后进入「创世纪」过场生成世界/角色/任务线，后续以任务链推进。
+BeautifulLife 是一个 **AI 文字跑团/冒险游戏**。你将扮演一名在未知世界中求生与成长的角色，通过输入行动（例如“潜入哨站”“交涉”“战斗”）推进剧情，完成主线与支线任务。
 
-## 功能概览
+这个项目面向玩家与体验者：
+- 你可以快速创建角色与世界背景；
+- AI 会生成任务、事件、状态变化与剧情反馈；
+- 你可以持续“打一局”并保存进度。
 
-- 前端：简约高端暗色 UI，创世纪过场、人物面板、任务日志、AI 选项与自定义行动输入、地图抽屉。
-- 后端：提供 Genesis / Turn / Save 三个接口（模拟 LLM 输出）。
-- 存档：以 JSON 文件形式保存在 `server/data/` 中。
+---
 
-## 本地开发
+## 这是什么游戏？
 
-> 需要 Node.js 18+。
+一句话：**可交互的 AI 跑团游戏 Demo**。
 
-### Windows 一键启动
+游戏流程：
+1. 设定世界观与角色信息；
+2. 进入「创世纪」生成初始剧情与任务；
+3. 每回合输入行动，AI 返回结果并推进故事；
+4. 观察角色属性、任务进度、地图与日志；
+5. 随时保存/读取存档继续冒险。
 
+适合喜欢：
+- 文字冒险
+- DND/跑团叙事
+- AI 剧情生成
+
+---
+
+## 快速开始
+
+> 需要 Node.js 18+
+
+### Windows
 ```bat
 run_game.bat
 ```
 
-脚本会提示输入 API Key，并自动安装依赖、同时启动前后端。
+### macOS / Linux
+```bash
+bash run_game.sh
+```
+
+启动后：
+- 前端：`http://localhost:5173`
+- 后端：`http://localhost:3001`
+
+---
+
+## 手动启动（开发模式）
 
 ### 1) 启动后端
-
 ```bash
 cd server
 npm install
 npm run dev
 ```
 
-默认端口：`http://localhost:3001`
-
 ### 2) 启动前端
-
 ```bash
 cd client
 npm install
 npm run dev
 ```
 
-前端地址：`http://localhost:5173`
-
-> 如需修改后端地址，可在 `client` 目录下新建 `.env`：
-
+如需修改后端地址，在 `client/.env` 中配置：
 ```bash
 VITE_API_BASE=http://localhost:3001
 ```
 
-## 生产部署（简易）
+---
 
-### 1) 构建前端
+## 玩家使用说明
 
-```bash
-cd client
-npm install
-npm run build
-```
+1. 打开游戏页面后，先填写角色描述与世界设定；
+2. 在模型设置中选择可用模型并填入 API Key（按你使用的平台填写）；
+3. 点击开始创世纪；
+4. 每回合输入你的行动，或直接选择推荐行动；
+5. 持续推进剧情，完成任务链；
+6. 点击保存，后续可读取继续游玩。
 
-### 2) 启动后端（静态托管前端）
+---
 
-```bash
-cd ../server
-npm install
-npm start
-```
+## API（给开发者）
 
-后端会自动托管 `client/dist`，直接访问 `http://localhost:3001` 即可。
+- `POST /api/genesis`：生成初始角色/世界/任务
+- `POST /api/turn`：推进一回合
+- `POST /api/save`：保存进度
+- `GET /api/save/:id`：读取存档
+- `POST /api/task-gene`：生成任务扩展内容
 
-## API 说明（模拟 LLM）
+---
 
-- `POST /api/genesis`：生成角色、世界、任务线、初始任务。
-- `POST /api/turn`：根据玩家行动推进任务。
-- `POST /api/save`：保存游戏状态，返回存档编号。
-- `GET /api/save/:id`：读取存档。
+## 安全说明（API Key）
 
-## 目录结构
+- 不要把真实 API Key 写死在代码或提交到仓库；
+- 建议使用环境变量或运行时输入；
+- 本仓库已排查，未发现硬编码的真实密钥。
 
-```
-.
-├── client
-│   └── src
-│       ├── App.jsx
-│       └── index.css
-└── server
-    ├── data
-    └── index.js
-```
